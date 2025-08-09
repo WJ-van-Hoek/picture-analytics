@@ -1,0 +1,21 @@
+# Normalize line endings to LF in repo (cross-platform safe)
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
+*.cfg  text eol=lf
+*.ini  text eol=lf
+*.ps1  text eol=lf
+
+# Treat images/binaries as binary (no EOL changes, no diffs)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
