@@ -1,6 +1,5 @@
 # Picture Analytics
-
-Refactor of the single-file JPG parsing tool into a small package of classes.
+Rudimentary JPG analytics tool
 
 ## Install
 ```bash
