@@ -1,5 +1,5 @@
 # src/analytics/__init__.py
-__version__ = "0.1.0"
+__version__ = "0.1.0a1"
 
 from .utils import JsonSanitizer, read_file_info
 from .exif import ExifExtractor
