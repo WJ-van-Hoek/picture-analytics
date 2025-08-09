@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 from PIL import Image
+
+from . import exif
 from .utils import JsonSanitizer, read_file_info
 from .exif import ExifExtractor
 from .pixels import PixelAnalyzer
@@ -36,7 +38,7 @@ class AnalyticsPipeline:
                 "converted": None,
             }
             try:
-                report["gps"] = self.exif.parse_gps(report["exif"]) or {}
+                report["gps"] = exif.parse_gps(report["exif"]) or {}
             except Exception:
                 report["gps"] = {}
             if self.run_ocr_flag:

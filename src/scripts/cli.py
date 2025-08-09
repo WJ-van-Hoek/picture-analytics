@@ -5,7 +5,7 @@ from pathlib import Path
 from .pipeline import AnalyticsPipeline
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Mini-analytics: EXIF, GPS, pixels, OCR, convert/resize.")
+    p = argparse.ArgumentParser(description="Mini picture analytics: EXIF, GPS, pixels, OCR, convert/resize.")
     p.add_argument("-i", "--input", required=True, help="Path to input image.")
     p.add_argument("-o", "--outdir", default="out", help="Output directory.")
     p.add_argument("--ocr", action="store_true", help="Run OCR.")

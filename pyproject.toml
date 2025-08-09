@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "picture-analytics"           # distribution name on PyPI (hyphen is OK here)
+name = "picture_analytics"           # distribution name on PyPI (hyphen is OK here)
 version = "0.1.0"
-description = "Mini image analytics toolkit: EXIF+GPS, pixel stats, OCR, convert/resize."
+description = "Mini picture analytics toolkit: EXIF+GPS, pixel stats, OCR, convert/resize."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }        # or "Apache-2.0", etc.
@@ -20,7 +20,7 @@ Homepage = "https://example.com"  # optional
 Repository = "https://example.com/repo"  # optional
 
 [project.scripts]
-picture-analytics = "analytics.cli:main"  # installs a console command
+picture_analytics = "scripts.cli:main"  # installs a console command
 
 [tool.setuptools]
 package-dir = {"" = "src"}

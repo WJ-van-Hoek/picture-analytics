@@ -19,6 +19,18 @@ def _to_float(x) -> Optional[float]:
         return None
     return None
 
+def parse_gps(self, exif: Dict[str, Any]) -> Dict[str, Any]:
+    gps = exif.get("GPSInfo")
+    if not isinstance(gps, dict):
+        return {}
+    lat = dms_to_degrees(gps.get("GPSLatitude"), gps.get("GPSLatitudeRef"))
+    lon = dms_to_degrees(gps.get("GPSLongitude"), gps.get("GPSLongitudeRef"))
+    out = {}
+    if lat is not None and lon is not None:
+        out["latitude"] = lat
+        out["longitude"] = lon
+    return out
+
 def dms_to_degrees(dms, ref) -> Optional[float]:
     try:
         if not dms or len(dms) != 3:
@@ -59,15 +71,3 @@ class ExifExtractor:
         except Exception as e:
             exif_info["error"] = f"Failed to read EXIF: {e}"
         return exif_info
-
-    def parse_gps(self, exif: Dict[str, Any]) -> Dict[str, Any]:
-        gps = exif.get("GPSInfo")
-        if not isinstance(gps, dict):
-            return {}
-        lat = dms_to_degrees(gps.get("GPSLatitude"), gps.get("GPSLatitudeRef"))
-        lon = dms_to_degrees(gps.get("GPSLongitude"), gps.get("GPSLongitudeRef"))
-        out = {}
-        if lat is not None and lon is not None:
-            out["latitude"] = lat
-            out["longitude"] = lon
-        return out
