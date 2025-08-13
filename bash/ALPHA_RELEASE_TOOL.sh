@@ -74,6 +74,63 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+# ----------------------------------------------------------------------
+# 🔎 ensure_tag_available — verify a tag doesn't exist or offer safe cleanup
+#   - Uses gh CLI (if available) to detect a GitHub Release for the tag.
+#   - Without gh, only allows deletion if the tag isn't on the remote.
+# ----------------------------------------------------------------------
+ensure_tag_available() {
+  local tag="$1" remote="$2"
+
+  # Does the tag exist locally?
+  if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+    warn "Tag '$tag' already exists locally."
+    local exists_remote=false
+    if git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null 2>&1; then
+      exists_remote=true
+      warn "Tag '$tag' also exists on remote '$remote'."
+    fi
+
+    # If gh CLI is available, check for a GitHub Release for this tag
+    local release_exists="unknown"
+    if command -v gh >/dev/null 2>&1; then
+      if gh release view "$tag" >/dev/null 2>&1; then
+        release_exists="yes"
+      else
+        release_exists="no"
+      fi
+    fi
+
+    # Decision matrix
+    if [[ "$release_exists" == "yes" ]]; then
+      die "A GitHub Release for '$tag' exists. Do NOT delete this tag. Please bump version instead."
+    fi
+
+    if [[ "$exists_remote" == true ]]; then
+      if [[ "$release_exists" == "unknown" ]]; then
+        warn "Cannot verify GitHub Release state (gh not installed). Refusing to delete remote tag."
+        die "Please bump version or install GitHub CLI (https://cli.github.com/) to allow safe checks."
+      fi
+      # No release exists; allow remote+local deletion with explicit confirmation
+      if confirm "Delete tag '$tag' from remote '$remote' and locally (no release found)?" "n"; then
+        git push "$remote" ":refs/tags/$tag"   # delete remote tag
+        git tag -d "$tag"                      # delete local tag
+        info "Deleted tag '$tag' on remote and locally."
+      else
+        die "Tag '$tag' exists. Aborting to avoid accidental overwrite."
+      fi
+    else
+      # Only local tag exists; allow local deletion
+      if confirm "Delete local tag '$tag' (no remote tag found)?" "y"; then
+        git tag -d "$tag"
+        info "Deleted local tag '$tag'."
+      else
+        die "Tag '$tag' exists locally. Aborting to avoid accidental overwrite."
+      fi
+    fi
+  fi
+}
+
 # ------------------------------------------------------------------------------
 # 🧩 VERSION IO HELPERS — read/update versions in files
 # ------------------------------------------------------------------------------
@@ -360,6 +417,9 @@ if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE?" "y"; then
   git push "$REMOTE" "$CURRENT_BRANCH"
   DID_PUSH_BRANCH=true
 fi
+
+# Ensure we don't clobber an existing tag; offer safe cleanup if needed
+ensure_tag_available "$TAG" "$REMOTE"
 
 # ------------------------------------------------------------------------------
 # 🔐 CREATE & PUSH TAG — signed (GPG) or unsigned, to trigger workflow
