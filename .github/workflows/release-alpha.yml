@@ -1,4 +1,5 @@
 ﻿name: Alpha Pre-Release
+run-name: ${{ format('Alpha Release {0}', replace(replace(github.ref_name, 'v', ''), '-alpha.', 'a')) }}
 
 on:
   push:
