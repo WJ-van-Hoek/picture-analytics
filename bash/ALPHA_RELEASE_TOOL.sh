@@ -34,6 +34,11 @@ TARGET_BRANCH="develop-alpha"            # Branch that alpha releases should com
 REMOTE="origin"                          # Remote to push branch/tag to
 SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
+# --- state flags so we can report whether a release actually ran ---
+DID_PUSH_BRANCH=false
+DID_PUSH_TAG=false
+
+
 # Optional: prefer venv python if active; fallback to system python3
 if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
   PYTHON_CMD="${VIRTUAL_ENV}/bin/python"
@@ -353,6 +358,7 @@ fi
 # ------------------------------------------------------------------------------
 if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE?" "y"; then
   git push "$REMOTE" "$CURRENT_BRANCH"
+  DID_PUSH_BRANCH=true
 fi
 
 # ------------------------------------------------------------------------------
@@ -368,9 +374,32 @@ echo "Created tag: $TAG"
 
 if confirm "Push tag '$TAG' to $REMOTE and trigger workflow?" "y"; then
   git push "$REMOTE" "$TAG"
+  DID_PUSH_TAG=true
   info "Tag pushed. GitHub Actions will build, create a pre-release, and publish to TestPyPI."
 else
   warn "Tag not pushed. Later, run: git push $REMOTE $TAG"
+fi
+
+# ----------------------------------------------------------------------
+# 📣 FINAL STATUS — make it explicit whether a release was executed
+# ----------------------------------------------------------------------
+if [[ "$DID_PUSH_TAG" == true ]]; then
+  info "Release EXECUTED: tag '$TAG' was pushed. Workflow should be running on GitHub."
+else
+  echo
+  echo "=============================================================="
+  echo "⚠️  Release NOT executed"
+  echo "    The alpha tag was created locally but NOT pushed."
+  echo "    No GitHub Actions workflow has been triggered."
+  echo
+  echo "    To execute the release now, run:"
+  echo "      git push $REMOTE $TAG"
+  echo "=============================================================="
+  echo
+fi
+
+if [[ "$DID_PUSH_TAG" != true ]]; then
+  exit 2  # non-zero indicates no release executed
 fi
 
 # ------------------------------------------------------------------------------
