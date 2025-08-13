@@ -15,7 +15,7 @@ set -euo pipefail  # Exit on error, undefined var is error, pipeline errors prop
 # --- CONFIGURATION ---
 PYPROJECT="./../pyproject.toml"                 # Path to pyproject.toml
 INIT_FILE="./../src/scripts/__init__.py"        # Path to __init__.py with __version__
-TARGET_BRANCH="alpha-develop"                   # Branch intended for alpha releases
+TARGET_BRANCH="develop-alpha"                   # Branch intended for alpha releases
 REMOTE="origin"                                 # Git remote name to push to
 SIGN_TAG_DEFAULT="n"                            # Default answer for signing tags ('y' or 'n')
 # ---------------------
@@ -73,7 +73,23 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git reposit
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
   warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$TARGET_BRANCH'."
-  if ! confirm "Continue anyway?" "n"; then exit 1; fi
+  if confirm "Switch to '$TARGET_BRANCH' now?" "y"; then
+    # Check if target branch exists locally or remotely
+    if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+      git checkout "$TARGET_BRANCH"
+    elif git ls-remote --exit-code --heads "$REMOTE" "$TARGET_BRANCH" >/dev/null 2>&1; then
+      git fetch "$REMOTE" "$TARGET_BRANCH"
+      git checkout "$TARGET_BRANCH"
+    else
+      die "Branch '$TARGET_BRANCH' does not exist locally or on remote '$REMOTE'."
+    fi
+    CURRENT_BRANCH="$TARGET_BRANCH"
+    info "Switched to branch '$CURRENT_BRANCH'."
+  else
+    if ! confirm "Continue on '$CURRENT_BRANCH' anyway?" "n"; then
+      exit 1
+    fi
+  fi
 fi
 
 # Check for uncommitted changes
