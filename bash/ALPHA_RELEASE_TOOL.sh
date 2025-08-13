@@ -1,154 +1,203 @@
 #!/usr/bin/env bash
-# ==============================================================
-# Alpha Release Script for picture_analytics
+# ==============================================================================
+# ALPHA_RELEASE_TOOL.sh
 #
-# This script guides you through creating an alpha release:
-#  - Verifies branch, working tree, and required files
-#  - Reads and cross-checks version numbers in pyproject.toml & __init__.py
-#  - Prompts to update them if mismatched or not alpha
-#  - Builds and validates the package
-#  - Creates and pushes the git tag that triggers GitHub Actions release workflow
-# ==============================================================
+# Purpose:
+#   Interactive helper to cut an **alpha** prerelease for this repo.
+#   - Verifies branch & workspace state
+#   - Reads & validates versions in pyproject.toml and __init__.py
+#   - Lets you bump/choose a new alpha version (PEP 440: X.Y.ZaN)
+#   - Builds the package (sdist + wheel) and validates metadata
+#   - Creates and (optionally) pushes a Git tag `vX.Y.Z-alpha.N`
+#     that triggers your GitHub Actions workflow to:
+#       • publish to TestPyPI
+#       • create a GitHub pre-release with artifacts
+#
+# Usage:
+#   chmod +x bash/ALPHA_RELEASE_TOOL.sh
+#   bash bash/ALPHA_RELEASE_TOOL.sh
+#
+# Notes:
+#   - Adjust INIT_FILE and smoke test import if your package path/name differs.
+#   - This script uses system `python3`. If you prefer a venv, activate it first
+#     or adapt PYTHON_CMD below to point to your venv’s python.
+# ==============================================================================
 
-set -euo pipefail  # Exit on error, undefined var is error, pipeline errors propagate
+set -euo pipefail  # safer bash: fail on errors/undefined vars; pipefail propagates failures
 
-# --- CONFIGURATION ---
-PYPROJECT="./pyproject.toml"                    # Path to pyproject.toml
-INIT_FILE="./src/scripts/__init__.py"           # Path to __init__.py with __version__
-TARGET_BRANCH="develop-alpha"                   # Branch intended for alpha releases
-REMOTE="origin"                                 # Git remote name to push to
-SIGN_TAG_DEFAULT="n"                            # Default answer for signing tags ('y' or 'n')
-# ---------------------
+# ------------------------------------------------------------------------------
+# 🔧 CONFIGURATION — tailor these to your repository layout
+# ------------------------------------------------------------------------------
+PYPROJECT="./pyproject.toml"             # Path to pyproject.toml
+INIT_FILE="./src/scripts/__init__.py"    # Path to __init__.py containing __version__
+TARGET_BRANCH="develop-alpha"            # Branch that alpha releases should come from
+REMOTE="origin"                          # Remote to push branch/tag to
+SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
-# ANSI colors for output
-RED="$(printf '\033[31m')"
-GRN="$(printf '\033[32m')"
-YEL="$(printf '\033[33m')"
-BLU="$(printf '\033[34m')"
-NC="$(printf '\033[0m')"  # Reset
+# Optional: prefer venv python if active; fallback to system python3
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  PYTHON_CMD="${VIRTUAL_ENV}/bin/python"
+else
+  PYTHON_CMD="python3"
+fi
 
-# --- UTILITY FUNCTIONS ---
+# ------------------------------------------------------------------------------
+# 🎨 COLORS & PROMPT HELPERS — pretty output + interactive prompts
+# ------------------------------------------------------------------------------
+RED="$(printf '\033[31m')"; GRN="$(printf '\033[32m')"; YEL="$(printf '\033[33m')"; BLU="$(printf '\033[34m')"; NC="$(printf '\033[0m')"
+
 ask() {
-  # Prompt user with optional default answer
+  # ask "Question" "default" -> echoes answer (or default if empty)
   local q="$1"; local d="${2:-}"
   read -r -p "$(printf "${BLU}?${NC} %s %s " "$q" "${d:+[$d]}")" ans || true
   echo "${ans:-$d}"
 }
 
 confirm() {
-  # Prompt user for y/n confirmation (default 'y')
-  local q="$1"
-  local d="${2:-y}"
-  local ans
-  ans="$(ask "$q" "$d")"
+  # confirm "Question" "default(y/n)" -> returns 0 for yes, 1 for no
+  local q="$1"; local d="${2:-y}"
+  local ans; ans="$(ask "$q" "$d")"
   [[ "$ans" =~ ^[Yy]$ ]]
 }
 
-die() { echo -e "${RED}✖ $*${NC}"; exit 1; }
-info(){ echo -e "${GRN}✔${NC} $*"; }
-warn(){ echo -e "${YEL}!${NC} $*"; }
+die()  { echo -e "${RED}✖ $*${NC}"; exit 1; }
+info() { echo -e "${GRN}✔${NC} $*"; }
+warn() { echo -e "${YEL}!${NC} $*"; }
 
 require_cmd() {
-  # Ensure a required command is available
+  # require_cmd <name> -> exits if command is missing
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-# --- PREFLIGHT CHECKS ---
+# ------------------------------------------------------------------------------
+# 🧩 VERSION IO HELPERS — read/update versions in files
+# ------------------------------------------------------------------------------
+get_pyproject_version() {
+  # Extracts: version = "X.Y.ZaN" from pyproject.toml (first occurrence)
+  awk -F '"' '/^\s*version\s*=\s*"/ {print $2; exit}' "$PYPROJECT"
+}
 
-# Check we have required commands
+get_init_version() {
+  # Extracts: __version__ = "X.Y.ZaN" from __init__.py
+  awk -F '"' '/__version__\s*=\s*"/ {print $2; exit}' "$INIT_FILE"
+}
+
+set_versions() {
+  # In-place update of both files to a new version string (safe via Python)
+  # Usage: set_versions "0.1.0a4"
+  local new="$1"
+  "$PYTHON_CMD" - "$PYPROJECT" "$INIT_FILE" "$new" <<'PY'
+import sys, re, pathlib
+pyproject = pathlib.Path(sys.argv[1])
+initf     = pathlib.Path(sys.argv[2])
+new       = sys.argv[3]
+
+def sub_file(p: pathlib.Path, pattern: str, repl: str):
+    text = p.read_text(encoding='utf-8')
+    new_text, n = re.subn(pattern, repl, text, flags=re.M)
+    if n == 0:
+        print(f"[WARN] No match for pattern in {p}", file=sys.stderr)
+    p.write_text(new_text, encoding='utf-8')
+
+# pyproject.toml line: version = "X"
+sub_file(pyproject, r'(?m)^(\s*version\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
+
+# __init__.py line: __version__ = "X"
+sub_file(initf,     r'(?m)^(__version__\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
+PY
+}
+
+# ------------------------------------------------------------------------------
+# 🔢 VERSION MATH (ALPHA ONLY) — validate/bump/convert
+# ------------------------------------------------------------------------------
+is_alpha_pep440() {
+  # Validates PEP 440 alpha: X.Y.ZaN (e.g., 0.1.0a4)
+  [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]]
+}
+
+pep440_to_tag() {
+  # Converts PEP 440 alpha -> git tag used by workflow:
+  #   0.1.0a4  -> v0.1.0-alpha.4
+  local v="$1"
+  [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]] || return 1
+  echo "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-alpha.${BASH_REMATCH[4]}"
+}
+
+bump_alpha() {
+  # 0.1.0a4 -> 0.1.0a5
+  local v="$1"
+  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
+  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}" a="${BASH_REMATCH[4]}"
+  echo "${M}.${m}.${p}a$((a+1))"
+}
+
+bump_patch_alpha() {
+  # 0.1.0a4 -> 0.1.1a1  (increment PATCH, reset alpha counter)
+  local v="$1"
+  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
+  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}"
+  echo "${M}.${m}.$((p+1))a1"
+}
+
+bump_minor_alpha() {
+  # 0.1.0a4 -> 0.2.0a1  (increment MINOR, reset PATCH & alpha)
+  local v="$1"
+  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
+  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}"
+  echo "${M}.$((m+1)).0a1"
+}
+
+# ------------------------------------------------------------------------------
+# 🚦 PREFLIGHT — environment, repo, branch, cleanliness
+# ------------------------------------------------------------------------------
 require_cmd git
-require_cmd python3
+require_cmd "$PYTHON_CMD"
 require_cmd sed
 require_cmd awk
 
-# Verify pip exists for python3
-if ! python3 -m pip >/dev/null 2>&1; then
-  die "pip not available for python3"
+# Verify pip is available for chosen Python
+if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
+  die "pip not available for $($PYTHON_CMD -V 2>/dev/null || echo python). Activate your venv or install pip."
 fi
 
-# Verify inside a Git repo
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git repository"
+# Ensure we are in a git repo
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git repository."
 
-# Check current branch
+# Check branch; offer to switch to TARGET_BRANCH
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
   warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$TARGET_BRANCH'."
   if confirm "Switch to '$TARGET_BRANCH' now?" "y"; then
-    # Check if target branch exists locally or remotely
+    # If local branch exists, checkout; else try fetching remote branch
     if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
       git checkout "$TARGET_BRANCH"
     elif git ls-remote --exit-code --heads "$REMOTE" "$TARGET_BRANCH" >/dev/null 2>&1; then
       git fetch "$REMOTE" "$TARGET_BRANCH"
       git checkout "$TARGET_BRANCH"
     else
-      die "Branch '$TARGET_BRANCH' does not exist locally or on remote '$REMOTE'."
+      die "Branch '$TARGET_BRANCH' does not exist locally or on '$REMOTE'."
     fi
     CURRENT_BRANCH="$TARGET_BRANCH"
     info "Switched to branch '$CURRENT_BRANCH'."
+    git status -sb || true
   else
-    if ! confirm "Continue on '$CURRENT_BRANCH' anyway?" "n"; then
-      exit 1
-    fi
+    confirm "Continue on '$CURRENT_BRANCH' anyway?" "n" || exit 1
   fi
 fi
 
-# Check for uncommitted changes
+# Warn on uncommitted changes (script may commit version bump)
 if [[ -n "$(git status --porcelain)" ]]; then
   warn "You have uncommitted changes."
-  if ! confirm "Continue (may commit version bump)?" "y"; then exit 1; fi
+  confirm "Continue (script may commit version bump)?" "y" || exit 1
 fi
 
-# --- VERSION HANDLING ---
-
-# Read version from pyproject.toml (first match of version = "...")
-get_pyproject_version() {
-  awk -F '"' '/^\s*version\s*=\s*"/ {print $2; exit}' "$PYPROJECT"
-}
-
-# Read __version__ from __init__.py
-get_init_version() {
-  awk -F '"' '/__version__\s*=\s*"/ {print $2; exit}' "$INIT_FILE"
-}
-
-# Update version in both pyproject.toml and __init__.py using Python (safe replace)
-set_versions() {
-  local new="$1"
-  python3 - "$PYPROJECT" "$INIT_FILE" "$new" <<'PY'
-import sys, re, pathlib
-pyproject, initf, new = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
-
-def sub_file(p: pathlib.Path, pattern: str, repl: str):
-    txt = p.read_text(encoding='utf-8')
-    new_txt, n = re.subn(pattern, repl, txt, flags=re.M)
-    if n == 0:
-        print(f"[WARN] No match in {p} for pattern: {pattern}", file=sys.stderr)
-    p.write_text(new_txt, encoding='utf-8')
-
-# pyproject: version = "X"
-sub_file(pyproject, r'(?m)^(\s*version\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
-# __init__.py: __version__ = "X"
-sub_file(initf, r'(?m)^(__version__\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
-PY
-}
-
-# Validate PEP 440 alpha version (e.g., 1.2.3a4)
-is_alpha_pep440() {
-  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+a[0-9]+$ ]]
-}
-
-# Convert PEP 440 alpha to Git tag format (0.1.0a4 -> v0.1.0-alpha.4)
-pep440_to_tag() {
-  local v="$1"
-  local base="${v%%a*}"
-  local a="${v##*a}"
-  echo "v${base}-alpha.${a}"
-}
-
-# Ensure files exist
+# Ensure key files exist
 [[ -f "$PYPROJECT" ]] || die "Cannot find $PYPROJECT"
-[[ -f "$INIT_FILE" ]] || die "Cannot find $INIT_FILE"
+[[ -f "$INIT_FILE"  ]] || die "Cannot find $INIT_FILE"
 
-# Read current versions
+# ------------------------------------------------------------------------------
+# 🔍 READ CURRENT VERSIONS — from pyproject & __init__
+# ------------------------------------------------------------------------------
 PV="$(get_pyproject_version || true)"
 IV="$(get_init_version || true)"
 
@@ -156,11 +205,14 @@ echo "Detected versions:"
 echo "  $PYPROJECT version:     ${PV:-<none>}"
 echo "  $INIT_FILE __version__: ${IV:-<none>}"
 
-# If mismatch, missing, or not alpha, prompt to update
+# ------------------------------------------------------------------------------
+# 🧭 CHOOSE VERSION — fix mismatches or offer bumps even if consistent
+# ------------------------------------------------------------------------------
 if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$PV"; then
-  warn "Version mismatch or not an alpha version."
-  NEWV="$(ask "Enter alpha version (PEP 440, e.g., 0.1.0a4)" "${PV:-0.1.0a1}")"
-  is_alpha_pep440 "$NEWV" || die "Version '$NEWV' is not alpha (expected like 0.1.0a4)."
+  # If missing/mismatched/not-alpha: ask explicitly for a correct alpha version
+  warn "Version mismatch or not an alpha version (expected PEP 440 like X.Y.ZaN)."
+  NEWV="$(ask "Enter alpha version (e.g., 0.1.0a4)" "${PV:-0.1.0a1}")"
+  is_alpha_pep440 "$NEWV" || die "Version '$NEWV' is not alpha (expected X.Y.ZaN)."
   echo "Updating versions to $NEWV ..."
   set_versions "$NEWV"
   git add "$PYPROJECT" "$INIT_FILE"
@@ -168,42 +220,72 @@ if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$P
   PV="$NEWV"; IV="$NEWV"
   info "Versions updated and committed."
 else
+  # Versions are consistent alpha; offer a menu for bump strategies
   info "Versions are consistent and alpha: $PV"
+  echo
+  echo "Choose a version action:"
+  echo "  1) Keep current                -> $PV"
+  echo "  2) Bump alpha (aN + 1)         -> $(bump_alpha "$PV")"
+  echo "  3) New PATCH alpha (Z+1 a1)    -> $(bump_patch_alpha "$PV")"
+  echo "  4) New MINOR alpha (Y+1.0 a1)  -> $(bump_minor_alpha "$PV")"
+  echo "  5) Enter custom (X.Y.ZaN)"
+  choice="$(ask "Select [1-5]" "1")"
+  case "$choice" in
+    1) NEWV="$PV" ;;
+    2) NEWV="$(bump_alpha "$PV")" ;;
+    3) NEWV="$(bump_patch_alpha "$PV")" ;;
+    4) NEWV="$(bump_minor_alpha "$PV")" ;;
+    5) NEWV="$(ask "Enter alpha version (X.Y.ZaN)" "$PV")"; is_alpha_pep440 "$NEWV" || die "Not alpha: $NEWV" ;;
+    *) die "Invalid choice";;
+  esac
+
+  if [[ "$NEWV" != "$PV" ]]; then
+    echo "Updating versions to $NEWV …"
+    set_versions "$NEWV"
+    git add "$PYPROJECT" "$INIT_FILE"
+    git commit -m "chore(release): bump version to $NEWV [alpha]"
+    PV="$NEWV"; IV="$NEWV"
+    info "Versions updated and committed."
+  fi
 fi
 
-# Derive Git tag name
-TAG="$(pep440_to_tag "$PV")"
+# ------------------------------------------------------------------------------
+# 🏷️  DERIVE GIT TAG — from PEP 440 alpha -> vX.Y.Z-alpha.N
+# ------------------------------------------------------------------------------
+TAG="$(pep440_to_tag "$PV")" || die "Cannot derive tag from $PV"
 echo "Proposed tag: ${BLU}${TAG}${NC} (derived from ${PV})"
 
-# --- BUILD AND VALIDATE PACKAGE ---
-
-# Install build tools if missing
-if ! python3 -c "import build" >/dev/null 2>&1; then
+# ------------------------------------------------------------------------------
+# 🧪 BUILD & VALIDATE — sdist+wheel, twine metadata check
+# ------------------------------------------------------------------------------
+# Ensure build tooling present in the chosen Python environment
+if ! "$PYTHON_CMD" -c "import build" >/dev/null 2>&1; then
   info "Installing build tooling (build, twine)…"
-  python3 -m pip install --upgrade pip >/dev/null
-  python3 -m pip install build twine >/dev/null
+  "$PYTHON_CMD" -m pip install --upgrade pip >/dev/null
+  "$PYTHON_CMD" -m pip install build twine >/dev/null
 fi
 
-# Clean previous build artifacts
-info "Cleaning dist/ …"
+# Clean old artifacts to avoid accidentally re-uploading stale files
+info "Cleaning dist/ build/ *.egg-info …"
 rm -rf dist build *.egg-info
 
-# Build package (sdist + wheel)
+# Create fresh artifacts
 info "Building sdist & wheel …"
-python3 -m build
+"$PYTHON_CMD" -m build
 
-# Validate metadata with twine
+# Validate metadata (README rendering, classifiers, etc.)
 info "Validating metadata with twine …"
-python3 -m twine check dist/*
+"$PYTHON_CMD" -m twine check dist/*
 
-# Optional: local smoke test install from built wheel
+# Optional local smoke-test: install built wheel and import the package
 if confirm "Run local smoke install from built wheel?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
-  python3 -m pip install --no-deps --force-reinstall "$WHEEL"
-  python3 - <<'PY'
+  "$PYTHON_CMD" -m pip install --no-deps --force-reinstall "$WHEEL"
+  # ⚠️ Adjust 'scripts' to your importable top-level package name if different
+  "$PYTHON_CMD" - <<'PY'
 try:
-    import analytics
-    print("✓ Imported 'analytics' successfully")
+    import scripts  # change to your real package name if not 'scripts'
+    print("✓ Import smoke test OK")
 except Exception as e:
     print("Import failed:", e)
     raise SystemExit(1)
@@ -211,35 +293,39 @@ PY
   info "Smoke install OK."
 fi
 
-# --- PUSH BRANCH AND TAG ---
-
-# Push current branch (if not already up to date)
+# ------------------------------------------------------------------------------
+# ⬆️  PUSH BRANCH — ensure remote has the version-bump commit
+# ------------------------------------------------------------------------------
 if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE?" "y"; then
   git push "$REMOTE" "$CURRENT_BRANCH"
 fi
 
-# Create signed or unsigned tag
+# ------------------------------------------------------------------------------
+# 🔐 CREATE & PUSH TAG — signed (GPG) or unsigned, to trigger workflow
+# ------------------------------------------------------------------------------
 SIGN="$(ask "Sign tag with GPG? (y/n)" "$SIGN_TAG_DEFAULT")"
 if [[ "$SIGN" =~ ^[Yy]$ ]]; then
   git tag -s "$TAG" -m "Alpha release $PV"
 else
-  git tag "$TAG" -m "Alpha release $PV"
+  git tag    "$TAG" -m "Alpha release $PV"
 fi
-
 echo "Created tag: $TAG"
 
-# Push tag to remote to trigger GitHub Actions workflow
 if confirm "Push tag '$TAG' to $REMOTE and trigger workflow?" "y"; then
   git push "$REMOTE" "$TAG"
   info "Tag pushed. GitHub Actions will build, create a pre-release, and publish to TestPyPI."
 else
-  warn "Tag not pushed. You can push later with: git push $REMOTE $TAG"
+  warn "Tag not pushed. Later, run: git push $REMOTE $TAG"
 fi
 
-# --- FINAL VALIDATION INSTRUCTIONS ---
-PKG_NAME_PIP="picture-analytics"   # pip normalizes underscores to hyphens
+# ------------------------------------------------------------------------------
+# ✅ POST-PUBLISH VALIDATION — easy pip install command (TestPyPI)
+# ------------------------------------------------------------------------------
+# PyPI normalizes underscores to hyphens for package names in pip install.
+# If your distribution name in pyproject is "picture_analytics", the pip name is "picture-analytics".
+PKG_NAME_PIP="picture-analytics"
 echo
-echo "Validation (after workflow publishes to TestPyPI):"
+echo "After your workflow publishes to TestPyPI, validate install with:"
 echo "  pip install --index-url https://test.pypi.org/simple/ --no-deps ${PKG_NAME_PIP}==${PV}"
 echo
-info "Alpha release script complete."
+info "Alpha release flow complete."
