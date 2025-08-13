@@ -286,18 +286,84 @@ info "Validating metadata with twine …"
 # Optional local smoke-test: install built wheel and import the package
 if confirm "Run local smoke install from built wheel?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
+
+  # First try STRICT mode: install without dependencies
   "$PYTHON_CMD" -m pip install --no-deps --force-reinstall "$WHEEL"
-  # ⚠️ Adjust 'scripts' to your importable top-level package name if different
+  IMPORT_OK=false
   "$PYTHON_CMD" - <<'PY'
 try:
-    import scripts  # change to your real package name if not 'scripts'
-    print("✓ Import smoke test OK")
+    import scripts  # change 'scripts' to your top-level package name if different
+    print("✓ Import smoke test OK (no deps)")
+except ModuleNotFoundError as e:
+    print(f"Dependency missing during strict install: {e}")
+    raise SystemExit(2)  # signal to bash to retry with deps
 except Exception as e:
-    print("Import failed:", e)
+    print(f"Import failed: {e}")
     raise SystemExit(1)
 PY
-  info "Smoke install OK."
+  STATUS=$?# Optional local smoke-test in a temporary venv (leaves no traces)
+if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
+  WHEEL="$(ls dist/*.whl | head -n1)"
+  [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
+
+  # Derive importable top-level module name from INIT_FILE path
+  # e.g., INIT_FILE="src/analytics/__init__.py" -> MODULE_IMPORT="analytics"
+  MODULE_IMPORT="$(basename "$(dirname "$INIT_FILE")")"
+  [[ -n "$MODULE_IMPORT" ]] || die "Could not derive module name from INIT_FILE=$INIT_FILE"
+
+  # Create a throwaway venv for the smoke test
+  SMOKE_VENV=".smoke-venv"
+  rm -rf "$SMOKE_VENV"
+  "$PYTHON_CMD" -m venv "$SMOKE_VENV"
+
+  SMOKE_PY="$SMOKE_VENV/bin/python"
+  "$SMOKE_PY" -m pip install -U pip >/dev/null
+
+  echo "Running strict smoke test (no dependencies)…"
+  "$SMOKE_PY" -m pip install --no-deps "$WHEEL" >/dev/null
+
+  # First try import without dependencies (strict mode)
+  set +e
+  "$SMOKE_PY" - <<PY
+import sys
+try:
+    import ${MODULE_IMPORT}
+    print("✓ Import smoke test OK (no deps)")
+    sys.exit(0)
+except ModuleNotFoundError as e:
+    print(f"Dependency missing in strict test: {e}")
+    sys.exit(2)  # signal to retry with deps
+except Exception as e:
+    print(f"Import failed in strict test: {e}")
+    sys.exit(1)
+PY
+  STATUS=$?
+  set -e
+
+  if [[ $STATUS -eq 2 ]]; then
+    echo "Retrying smoke test with dependencies installed…"
+    "$SMOKE_PY" -m pip install "$WHEEL" >/dev/null
+    "$SMOKE_PY" - <<PY
+import sys
+try:
+    import ${MODULE_IMPORT}
+    print("✓ Import smoke test OK (with deps)")
+    sys.exit(0)
+except Exception as e:
+    print(f"Import failed even with deps: {e}")
+    sys.exit(1)
+PY
+  elif [[ $STATUS -ne 0 ]]; then
+    # Clean the venv before failing to avoid leftovers
+    rm -rf "$SMOKE_VENV"
+    die "Smoke test failed."
+  fi
+
+  # Clean up the temporary venv so nothing remains installed locally
+  rm -rf "$SMOKE_VENV"
+  info "Smoke test completed and cleaned up."
 fi
+
 
 # ------------------------------------------------------------------------------
 # ⬆️  PUSH BRANCH — ensure remote has the version-bump commit
