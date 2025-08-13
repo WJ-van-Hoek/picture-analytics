@@ -301,7 +301,7 @@ except Exception as e:
     print(f"Import failed: {e}")
     raise SystemExit(1)
 PY
-  STATUS=$?# Optional local smoke-test in a temporary venv (leaves no traces)
+  STATUS=$? # Optional local smoke-test in a temporary venv (leaves no traces)
 if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
   [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
