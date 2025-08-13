@@ -1,5 +1,5 @@
 ﻿name: Alpha Pre-Release
-run-name: Alpha Release ${{ github.ref_name }}
+run-name: Release ${{ github.ref_name }}
 
 on:
   push:

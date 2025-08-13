@@ -74,6 +74,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+# Remove build artifacts created during this run
+clean_artifacts() {
+  echo "Removing build artifacts: dist/, build/, *.egg-info"
+  rm -rf dist build *.egg-info
+  info "Cleanup complete."
+}
+
 # ----------------------------------------------------------------------
 # 🔎 ensure_tag_available — verify a tag doesn't exist or offer safe cleanup
 #   - Uses gh CLI (if available) to detect a GitHub Release for the tag.
@@ -434,6 +441,16 @@ if confirm "Push tag '$TAG' to $REMOTE and trigger workflow?" "y"; then
 else
   warn "Tag not pushed. Later, run: git push $REMOTE $TAG"
 fi
+
+# Optionally clean local build artifacts once the release has been triggered
+if [[ "$DID_PUSH_TAG" == true ]]; then
+  if confirm "Clean up local build artifacts (dist/, build/, *.egg-info) now?" "y"; then
+    clean_artifacts
+  else
+    info "Skipping artifact cleanup. You can remove them later with: rm -rf dist build *.egg-info"
+  fi
+fi
+
 
 # ----------------------------------------------------------------------
 # 📣 FINAL STATUS — make it explicit whether a release was executed
