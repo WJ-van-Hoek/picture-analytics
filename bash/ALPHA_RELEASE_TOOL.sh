@@ -410,14 +410,6 @@ PY
   info "Smoke test completed and cleaned up."
 fi
 
-# ------------------------------------------------------------------------------
-# ⬆️  PUSH BRANCH — ensure remote has the version-bump commit
-# ------------------------------------------------------------------------------
-if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE?" "y"; then
-  git push "$REMOTE" "$CURRENT_BRANCH"
-  DID_PUSH_BRANCH=true
-fi
-
 # Ensure we don't clobber an existing tag; offer safe cleanup if needed
 ensure_tag_available "$TAG" "$REMOTE"
 
@@ -435,6 +427,7 @@ echo "Created tag: $TAG"
 if confirm "Push tag '$TAG' to $REMOTE and trigger workflow?" "y"; then
   git commit --allow-empty -m "alpha release $PV"
   info "Created empty commit for Alpha release $PV"
+  git push "$REMOTE" "$CURRENT_BRANCH"
   git push "$REMOTE" "$TAG"
   DID_PUSH_TAG=true
   info "Tag pushed. GitHub Actions will build, create a pre-release, and publish to TestPyPI."
