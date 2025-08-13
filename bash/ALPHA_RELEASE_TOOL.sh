@@ -13,8 +13,8 @@
 set -euo pipefail  # Exit on error, undefined var is error, pipeline errors propagate
 
 # --- CONFIGURATION ---
-PYPROJECT="./../pyproject.toml"                 # Path to pyproject.toml
-INIT_FILE="./../src/scripts/__init__.py"        # Path to __init__.py with __version__
+PYPROJECT="./pyproject.toml"                    # Path to pyproject.toml
+INIT_FILE="./src/scripts/__init__.py"           # Path to __init__.py with __version__
 TARGET_BRANCH="develop-alpha"                   # Branch intended for alpha releases
 REMOTE="origin"                                 # Git remote name to push to
 SIGN_TAG_DEFAULT="n"                            # Default answer for signing tags ('y' or 'n')
