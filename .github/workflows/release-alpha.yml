@@ -4,10 +4,10 @@ run-name: Release ${{ github.ref_name }}
 on:
   push:
     tags:
-      - "v*-alpha.*"
+      - "v*-alpha.*"   # e.g. v0.1.0-alpha.4
 
 permissions:
-  contents: write
+  contents: write      # for GitHub Release
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,10 +17,15 @@ jobs:
   build-and-publish-testpypi:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with: { python-version: ">=3.9" }
+      # Use the latest CPython 3.x available on the runner (>=3.11+ compatible)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
 
       - name: Install build tooling
         run: python -m pip install --upgrade pip && pip install build twine
@@ -28,14 +33,59 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Check metadata
+      - name: Check metadata (twine)
         run: twine check dist/*
+
+      # Optional: upload artifacts to the workflow for easy download/debugging
+      - name: Upload dist artifacts (workflow)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.ref_name }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      # Quick sanity: try installing the wheel (first strict, then with deps if needed)
+      - name: Smoke install wheel (strict → deps fallback)
+        shell: bash
+        run: |
+          WHEEL="$(ls dist/*.whl | head -n1)"
+          python -m pip install --no-deps --force-reinstall "$WHEEL" && python - <<'PY' || FALLBACK=$?
+          try:
+              # Import the top-level package; adjust if your import name differs
+              import picture_analytics as _
+              print("✓ Import OK (no deps)")
+          except ModuleNotFoundError as e:
+              print(f"Dependency missing (strict mode): {e}")
+              raise SystemExit(2)
+          except Exception as e:
+              print(f"Import failed: {e}")
+              raise
+          PY
+          if [[ "${FALLBACK:-0}" == "2" ]]; then
+            echo "Retrying with dependencies…"
+            python -m pip install --force-reinstall "$WHEEL"
+            python - <<'PY'
+            import picture_analytics as _
+            print("✓ Import OK (with deps)")
+            PY
+          fi
+
+      # Convert tag 'v1.2.3-alpha.4' → '1.2.3a4' for a nicer release title
+      - name: Derive PEP 440 version
+        id: pep
+        shell: bash
+        run: |
+          RAW="${GITHUB_REF_NAME}"           # v1.2.3-alpha.4
+          STRIPPED="${RAW#v}"                # 1.2.3-alpha.4
+          PEP440="${STRIPPED/-alpha./a}"     # 1.2.3a4
+          echo "pep=$PEP440" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub pre-release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: Alpha Release ${{ steps.pep.outputs.pep }}
           prerelease: true
           generate_release_notes: true
           files: |
