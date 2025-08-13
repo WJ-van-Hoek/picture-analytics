@@ -83,8 +83,6 @@ get_init_version() {
 }
 
 set_versions() {
-  # In-place update of both files to a new version string (safe via Python)
-  # Usage: set_versions "0.1.0a4"
   local new="$1"
   "$PYTHON_CMD" - "$PYPROJECT" "$INIT_FILE" "$new" <<'PY'
 import sys, re, pathlib
@@ -92,20 +90,22 @@ pyproject = pathlib.Path(sys.argv[1])
 initf     = pathlib.Path(sys.argv[2])
 new       = sys.argv[3]
 
-def sub_file(p: pathlib.Path, pattern: str, repl: str):
+def sub_file(p: pathlib.Path, pattern: str):
     text = p.read_text(encoding='utf-8')
-    new_text, n = re.subn(pattern, repl, text, flags=re.M)
+    # use \g<1> / \g<3> to avoid \1 + digits being parsed as group 10, etc.
+    new_text, n = re.subn(pattern, r'\g<1>'+new+r'\g<3>', text, flags=re.M)
     if n == 0:
-        print(f"[WARN] No match for pattern in {p}", file=sys.stderr)
+        print(f"[WARN] No match for version in {p}", file=sys.stderr)
     p.write_text(new_text, encoding='utf-8')
 
-# pyproject.toml line: version = "X"
-sub_file(pyproject, r'(?m)^(\s*version\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
+# pyproject.toml: version = "X" or 'X'
+sub_file(pyproject, r'(?m)^(\s*version\s*=\s*[\'"])([^\'"]+)([\'"])')
 
-# __init__.py line: __version__ = "X"
-sub_file(initf,     r'(?m)^(__version__\s*=\s*")([^"]+)(")', r'\1'+new+r'\3')
+# __init__.py: __version__ = "X" or 'X'
+sub_file(initf,     r'(?m)^(#__version__\b.*|(__version__\s*=\s*[\'"]))([^\'"]+)([\'"])')
 PY
 }
+
 
 # ------------------------------------------------------------------------------
 # 🔢 VERSION MATH (ALPHA ONLY) — validate/bump/convert
