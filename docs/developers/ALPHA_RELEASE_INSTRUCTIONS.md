@@ -44,9 +44,9 @@ These steps describe how to prepare, tag, and publish an **Alpha** pre-release u
 * Pushing the tag automatically triggers the `release-alpha.yml` workflow.
 * The workflow:
 
-  * Builds the package on Python 3.11+
+  * Builds the package on Python 3.9+
   * Validates metadata (`twine check`)
-  * Publishes to TestPyPI **only** from the Python 3.11 build
+  * Publishes to TestPyPI **only** from the Python 3.9+ build
 
 ---
 
