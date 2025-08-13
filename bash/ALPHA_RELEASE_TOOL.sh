@@ -283,25 +283,9 @@ info "Building sdist & wheel …"
 info "Validating metadata with twine …"
 "$PYTHON_CMD" -m twine check dist/*
 
-# Optional local smoke-test: install built wheel and import the package
-if confirm "Run local smoke install from built wheel?" "y"; then
-  WHEEL="$(ls dist/*.whl | head -n1)"
-
-  # First try STRICT mode: install without dependencies
-  "$PYTHON_CMD" -m pip install --no-deps --force-reinstall "$WHEEL"
-  IMPORT_OK=false
-  "$PYTHON_CMD" - <<'PY'
-try:
-    import scripts  # change 'scripts' to your top-level package name if different
-    print("✓ Import smoke test OK (no deps)")
-except ModuleNotFoundError as e:
-    print(f"Dependency missing during strict install: {e}")
-    raise SystemExit(2)  # signal to bash to retry with deps
-except Exception as e:
-    print(f"Import failed: {e}")
-    raise SystemExit(1)
-PY
-  STATUS=$? # Optional local smoke-test in a temporary venv (leaves no traces)
+# ------------------------------------------------------------------------------
+# 🧪 OPTIONAL SMOKE TEST — use a temporary venv (no traces left behind)
+# ------------------------------------------------------------------------------
 if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
   [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
@@ -363,7 +347,6 @@ PY
   rm -rf "$SMOKE_VENV"
   info "Smoke test completed and cleaned up."
 fi
-
 
 # ------------------------------------------------------------------------------
 # ⬆️  PUSH BRANCH — ensure remote has the version-bump commit
