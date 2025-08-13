@@ -90,22 +90,28 @@ pyproject = pathlib.Path(sys.argv[1])
 initf     = pathlib.Path(sys.argv[2])
 new       = sys.argv[3]
 
-def sub_file(p: pathlib.Path, pattern: str):
-    text = p.read_text(encoding='utf-8')
-    # use \g<1> / \g<3> to avoid \1 + digits being parsed as group 10, etc.
-    new_text, n = re.subn(pattern, r'\g<1>'+new+r'\g<3>', text, flags=re.M)
+def sub_pyproject(p):
+    # Match: version = "X"  or  version = 'X'  (first occurrence wins)
+    pat = re.compile(r'(?m)^(\s*version\s*=\s*)(["\'])([^"\']+)(\2)')
+    txt = p.read_text(encoding='utf-8')
+    txt, n = pat.subn(lambda m: f'{m.group(1)}{m.group(2)}{new}{m.group(2)}', txt, count=1)
     if n == 0:
-        print(f"[WARN] No match for version in {p}", file=sys.stderr)
-    p.write_text(new_text, encoding='utf-8')
+        print(f"[WARN] No version line updated in {p}", file=sys.stderr)
+    p.write_text(txt, encoding='utf-8')
 
-# pyproject.toml: version = "X" or 'X'
-sub_file(pyproject, r'(?m)^(\s*version\s*=\s*[\'"])([^\'"]+)([\'"])')
+def sub_init(p):
+    # Match: __version__ = "X"  or  __version__ = 'X' at start of line
+    pat = re.compile(r'(?m)^(\s*__version__\s*=\s*)(["\'])([^"\']*)(\2)')
+    txt = p.read_text(encoding='utf-8')
+    txt, n = pat.subn(lambda m: f'{m.group(1)}{m.group(2)}{new}{m.group(2)}', txt, count=1)
+    if n == 0:
+        print(f"[WARN] No __version__ line updated in {p}", file=sys.stderr)
+    p.write_text(txt, encoding='utf-8')
 
-# __init__.py: __version__ = "X" or 'X'
-sub_file(initf,     r'(?m)^(#__version__\b.*|(__version__\s*=\s*[\'"]))([^\'"]+)([\'"])')
+sub_pyproject(pyproject)
+sub_init(initf)
 PY
 }
-
 
 # ------------------------------------------------------------------------------
 # 🔢 VERSION MATH (ALPHA ONLY) — validate/bump/convert
