@@ -1,75 +1,21 @@
-﻿---
-# release-alpha.yml — Build on Python 3.11+ and publish alpha tags to TestPyPI
-# This workflow:
-#  - Builds your package on Python 3.11+ to verify compatibility
-#  - Validates metadata with twine
-#  - Publishes to TestPyPI ONLY when pushing a tag like `v1.2.3-alpha.4`
-#  - Keeps branch pushes (to `develop-alpha`) as build-only (no publish)
+﻿name: Alpha Pre-Release
 
-name: Alpha Pre-Release
-
-"on":
+on:
   push:
-    branches:
-      # Build on branch changes (useful for early feedback)
-      - develop-alpha
+    branches: [ alpha-develop ]
     tags:
-      # Also run on version tags for alpha pre-releases
       - "v*-alpha.*"
-
-concurrency:
-  # Prevent overlapping runs per ref
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Cancel older in-flight runs
-  cancel-in-progress: true
-
-permissions:
-  # Minimal permissions; publishing uses token via the action input
-  contents: read
 
 jobs:
   build-and-publish-testpypi:
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # Ensure 3.11+ compatibility
-        python-version: ['3.11']
-
     steps:
-      - name: Checkout
-        # Get the source at the triggering ref
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: ">=3.9" }
+      - run: python -m pip install --upgrade pip && pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Use matrix Python version
-          python-version: ${{ matrix.python-version }}
-          # Speed up installs using pip cache
-          cache: pip
-
-      - name: Upgrade pip and install build tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-        env:
-          # Slightly cleaner logs
-          PIP_DISABLE_PIP_VERSION_CHECK: '1'
-
-      - name: Build sdist and wheel
-        # Produces dist/*.tar.gz and dist/*.whl
-        run: python -m build
-
-      - name: Validate package metadata
-        # Checks README rendering & metadata
-        run: twine check dist/*
-
-      - name: Smoke test wheel install
-        run: |
-          pip install --no-index --find-links=dist dist/*.whl
-          # Simple sanity check post-install
-          python -c "print('Wheel install OK')"
-
-      # Publish only for alpha tags, and only from one matrix leg to avoid dup
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}

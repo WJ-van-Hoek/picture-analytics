@@ -3,21 +3,20 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "picture_analytics"           # distribution name on PyPI (hyphen is OK here)
-version = "0.1.0a1"
+name = "picture_analytics" # distribution name on PyPI
+version = "0.1.0a3"
 description = "Mini picture analytics toolkit: EXIF+GPS, pixel stats, OCR, convert/resize."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }        # or "Apache-2.0", etc.
-authors = [{ name = "Your Name" }]
+license = { text = "MIT" } # or "Apache-2.0", etc.
+authors = [{ name = "Willem" }]
 dependencies = [
   "pillow",
   "pytesseract",
 ]
 
 [project.urls]
-Homepage = "https://example.com"  # optional
-Repository = "https://example.com/repo"  # optional
+Repository = "https://github.com/WJ-van-Hoek/picture-analytics"
 
 [project.scripts]
 picture_analytics = "scripts.cli:main"  # installs a console command
