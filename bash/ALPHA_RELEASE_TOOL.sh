@@ -433,6 +433,8 @@ fi
 echo "Created tag: $TAG"
 
 if confirm "Push tag '$TAG' to $REMOTE and trigger workflow?" "y"; then
+  git commit --allow-empty -m "alpha release $PV"
+  info "Created empty commit for Alpha release $PV"
   git push "$REMOTE" "$TAG"
   DID_PUSH_TAG=true
   info "Tag pushed. GitHub Actions will build, create a pre-release, and publish to TestPyPI."
