@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "picture_analytics" # distribution name on PyPI
-version = "0.1.0a7"
+version = "0.1.0a8"
 description = "Mini picture analytics toolkit: EXIF+GPS, pixel stats, OCR, convert/resize."
 readme = "README.md"
 requires-python = ">=3.9"
