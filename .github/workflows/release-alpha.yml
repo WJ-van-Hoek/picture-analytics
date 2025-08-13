@@ -2,20 +2,50 @@
 
 on:
   push:
-    branches: [ alpha-develop ]
+    branches: [alpha-develop]
     tags:
       - "v*-alpha.*"
+
+permissions:
+  contents: write   # needed to create a GitHub Release
 
 jobs:
   build-and-publish-testpypi:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with: { python-version: ">=3.9" }
-      - run: python -m pip install --upgrade pip && pip install build
-      - run: python -m build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip && pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check metadata
+        run: twine check dist/*
+
+      # Create a GitHub Release (pre-release) and attach artifacts — only on alpha tags
+      - name: Create GitHub pre-release and upload assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      # Publish to TestPyPI — only on alpha tags
+      - name: Publish to TestPyPI
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          user: __token__
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          skip-existing: true
