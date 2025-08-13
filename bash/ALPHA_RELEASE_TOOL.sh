@@ -410,16 +410,29 @@ PY
   info "Smoke test completed and cleaned up."
 fi
 
-# ------------------------------------------------------------------------------
-# ⬆️  PUSH BRANCH — ensure remote has the version-bump commit
-# ------------------------------------------------------------------------------
-if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE?" "y"; then
+# ⬆️  PUSH BRANCH — run Alpha Branch CI (build-only, no publish)
+if confirm "Push current branch '$CURRENT_BRANCH' to $REMOTE? (runs Alpha Branch CI only)" "y"; then
   git push "$REMOTE" "$CURRENT_BRANCH"
   DID_PUSH_BRANCH=true
+else
+  info "Skipping branch push (you can still push the tag to run the release)."
 fi
 
 # Ensure we don't clobber an existing tag; offer safe cleanup if needed
 ensure_tag_available "$TAG" "$REMOTE"
+
+# Warn if local branch has commits not on remote (so release would point to unseen commits)
+if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
+  read ahead behind <<<"$(git rev-list --left-right --count "${CURRENT_BRANCH}"...${REMOTE}/"${CURRENT_BRANCH}")"
+  if [[ "${ahead:-0}" -gt 0 ]]; then
+    warn "Local branch has ${ahead} commit(s) not on $REMOTE/${CURRENT_BRANCH}."
+    confirm "Tag anyway (release will point to local HEAD not yet on remote)?" "n" || exit 1
+  fi
+else
+  warn "No upstream set for '$CURRENT_BRANCH'."
+  confirm "Continue without pushing branch first?" "n" || exit 1
+fi
+
 
 # ------------------------------------------------------------------------------
 # 🔐 CREATE & PUSH TAG — signed (GPG) or unsigned, to trigger workflow

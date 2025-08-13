@@ -2,12 +2,15 @@
 
 on:
   push:
-    branches: [alpha-develop]
     tags:
       - "v*-alpha.*"
 
 permissions:
-  contents: write   # needed to create a GitHub Release
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-publish-testpypi:
@@ -27,9 +30,7 @@ jobs:
       - name: Check metadata
         run: twine check dist/*
 
-      # Create a GitHub Release (pre-release) and attach artifacts — only on alpha tags
       - name: Create GitHub pre-release and upload assets
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -40,9 +41,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
 
-      # Publish to TestPyPI — only on alpha tags
       - name: Publish to TestPyPI
-        if: startsWith(github.ref, 'refs/tags/')
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

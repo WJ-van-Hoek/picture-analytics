@@ -1,0 +1,32 @@
+name: Alpha Branch CI
+
+on:
+  push:
+    branches: [alpha-develop]
+  pull_request:
+    branches: [alpha-develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: ">=3.9" }
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip && pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check metadata
+        run: twine check dist/*
