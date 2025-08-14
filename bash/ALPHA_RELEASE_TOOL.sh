@@ -35,9 +35,7 @@ REMOTE="origin"                          # Remote to push branch/tag to
 SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
 # --- state flags so we can report whether a release actually ran ---
-DID_PUSH_BRANCH=false
 DID_PUSH_TAG=false
-
 
 # Optional: prefer venv python if active; fallback to system python3
 if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
@@ -77,7 +75,7 @@ require_cmd() {
 # Remove build artifacts created during this run
 clean_artifacts() {
   echo "Removing build artifacts: dist/, build/, *.egg-info"
-  rm -rf dist build *.egg-info
+  rm -rf dist build ./src/*.egg-info
   info "Cleanup complete."
 }
 
