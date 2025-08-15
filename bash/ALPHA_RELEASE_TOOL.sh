@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 PYPROJECT="./pyproject.toml"
 INIT_FILE="./src/scripts/__init__.py"
-RC_BRANCH="rc-alpha"                     # <- target branch
+RC_BRANCH="alpha-rc"                     # target branch for alpha releases
 REMOTE="origin"
 SIGN_TAG_DEFAULT="n"
 
@@ -18,10 +18,10 @@ SIGN_TAG_DEFAULT="n"
 DID_PUSH_BRANCH=false
 DID_PUSH_TAG=false
 
-# Changelog file
+# Changelog
 ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-changelogs/alpha.md}"
 
-# Optional features (kept from your script)
+# Optional features
 ENFORCE_MONOTONIC_VERSION="${ENFORCE_MONOTONIC_VERSION:-true}"
 GPG_PREPARE="${GPG_PREPARE:-true}"
 
@@ -36,7 +36,6 @@ fi
 # 🎨 UI HELPERS
 # ------------------------------------------------------------------------------
 RED="$(printf '\033[31m')"; GRN="$(printf '\033[32m')"; YEL="$(printf '\033[33m')"; BLU="$(printf '\033[34m')"; NC="$(printf '\033[0m')"
-
 ask()      { local q="$1"; local d="${2:-}"; read -r -p "$(printf "${BLU}?${NC} %s %s " "$q" "${d:+[$d]}")" ans || true; echo "${ans:-$d}"; }
 confirm()  { local q="$1"; local d="${2:-y}"; local ans; ans="$(ask "$q" "$d")"; [[ "$ans" =~ ^[Yy]$ ]]; }
 die()      { echo -e "${RED}✖ $*${NC}"; exit 1; }
@@ -50,9 +49,9 @@ clean_artifacts() {
   info "Cleanup complete."
 }
 
-# ----------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # 🔎 Tag safety
-# ----------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 ensure_tag_available() {
   local tag="$1" remote="$2"
   if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
@@ -67,9 +66,7 @@ ensure_tag_available() {
     fi
     if [[ "$release_exists" == "yes" ]]; then die "A GitHub Release for '$tag' exists. Bump version instead."; fi
     if [[ "$exists_remote" == true ]]; then
-      if [[ "$release_exists" == "unknown" ]]; then
-        warn "Cannot verify GitHub Release state (gh not installed)."; die "Refusing to delete remote tag without checks."
-      fi
+      if [[ "$release_exists" == "unknown" ]]; then warn "Cannot verify release state (gh not installed)."; die "Refusing to delete remote tag without checks."; fi
       if confirm "Delete tag '$tag' from remote '$remote' and locally (no release found)?" "n"; then
         git push "$remote" ":refs/tags/$tag"; git tag -d "$tag"; info "Deleted tag '$tag' on remote and locally."
       else die "Tag '$tag' exists. Aborting."; fi
@@ -216,7 +213,7 @@ fi
 [[ -f "$INIT_FILE"  ]] || die "Cannot find $INIT_FILE"
 
 # ------------------------------------------------------------------------------
-# VENV (unchanged logic; runs after branch & before build)
+# 2) VENV (environment only; no build yet)
 # ------------------------------------------------------------------------------
 VENV_DIR="${VENV_DIR:-.venv}" ; VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"
 command -v deactivate >/dev/null 2>&1 && deactivate || true
@@ -230,7 +227,7 @@ pip install "${VENV_PIP_INSTALL:-.}"
 "$PYTHON_CMD" -m pip >/dev/null 2>&1 || die "pip not available for $("$PYTHON_CMD" -V 2>/dev/null || echo python)."
 
 # ------------------------------------------------------------------------------
-# 2) VERSION SELECTION (confirm which version we release)
+# 3) VERSION SELECTION (confirm what we are releasing)
 # ------------------------------------------------------------------------------
 PV="$(get_pyproject_version || true)"
 IV="$(get_init_version || true)"
@@ -268,14 +265,15 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 3) DERIVE TAG
+# 4) DERIVE TAG (from selected version)
 # ------------------------------------------------------------------------------
 TAG="$(pep440_to_tag "$PV")" || die "Cannot derive tag from $PV"
 echo "Proposed tag: ${BLU}${TAG}${NC} (derived from ${PV})"
 
 # ------------------------------------------------------------------------------
-# 4) CHANGELOG CHECKS (after version is confirmed)
+# 5) CHANGELOG CHECKS (after version is selected)
 # ------------------------------------------------------------------------------
+# Lightweight "recent changes" gate
 if [[ -n "$ALPHA_CHANGELOG" ]]; then
   if [[ ! -f "$ALPHA_CHANGELOG" ]]; then
     warn "Changelog '$ALPHA_CHANGELOG' not found."; confirm "Proceed anyway?" "n" || die "Aborting: changelog missing."
@@ -290,19 +288,18 @@ if [[ -n "$ALPHA_CHANGELOG" ]]; then
     fi
   fi
 fi
-
-# Strict content check for the selected version/tag
+# Strict content/version check (must contain the new version entry & non-empty body)
 ensure_alpha_changelog_updated "$PV" "$TAG"
 
 # ------------------------------------------------------------------------------
-# FINAL VERSION CONFIRMATION (right before build)
+# 6) FINAL VERSION CONFIRMATION (right before build)
 # ------------------------------------------------------------------------------
 if ! confirm_release_version "$PV" "$TAG"; then
   die "Release cancelled by user."
 fi
 
 # ------------------------------------------------------------------------------
-# 5) BUILD & VALIDATE
+# 7) BUILD & VALIDATE (only now)
 # ------------------------------------------------------------------------------
 if ! "$PYTHON_CMD" -c "import build" >/dev/null 2>&1; then
   info "Installing build tooling (build, twine)…"
@@ -314,7 +311,7 @@ info "Building sdist & wheel …"; "$PYTHON_CMD" -m build
 info "Validating metadata with twine …"; "$PYTHON_CMD" -m twine check dist/*
 
 # ------------------------------------------------------------------------------
-# Optional smoke test (unchanged)
+# Optional smoke test
 # ------------------------------------------------------------------------------
 if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"; [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
@@ -333,8 +330,7 @@ except ModuleNotFoundError as e:
 except Exception as e:
     print(f"Import failed: {e}"); sys.exit(1)
 PY
-  STATUS=$?
-  set -e
+  STATUS=$?; set -e
   if [[ $STATUS -eq 2 ]]; then
     echo "Retrying smoke test with dependencies …"; "$SMOKE_PY" -m pip install "$WHEEL" >/dev/null
     "$SMOKE_PY" - <<PY
