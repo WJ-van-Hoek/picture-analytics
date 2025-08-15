@@ -5,17 +5,12 @@
 # Purpose:
 #   Interactive helper to cut an **alpha** prerelease for this repo.
 #   - Verifies branch & workspace state
-#   - Reads & validates versions in pyproject.toml and __init__.py
-#   - Lets you bump/choose a new alpha version (PEP 440: X.Y.ZaN)
+#   - Confirms which alpha version to release (PEP 440: X.Y.ZaN)
 #   - Builds the package (sdist + wheel) and validates metadata
 #   - Creates and (optionally) pushes a Git tag `vX.Y.Z-alpha.N`
 #     that triggers your GitHub Actions workflow to:
 #       • publish to TestPyPI
 #       • create a GitHub pre-release with artifacts
-#
-# Usage:
-#   chmod +x bash/ALPHA_RELEASE_TOOL.sh
-#   bash bash/ALPHA_RELEASE_TOOL.sh
 # ==============================================================================
 
 set -euo pipefail  # safer bash
@@ -25,7 +20,7 @@ set -euo pipefail  # safer bash
 # ------------------------------------------------------------------------------
 PYPROJECT="./pyproject.toml"             # Path to pyproject.toml
 INIT_FILE="./src/scripts/__init__.py"    # Path to __init__.py containing __version__
-RC_BRANCH="rc-alpha"                     # Branch that alpha releases should come from
+RC_BRANCH="alpha-rc"                     # Branch that alpha releases should come from
 REMOTE="origin"                          # Remote to push branch/tag to
 SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
@@ -36,7 +31,7 @@ DID_PUSH_TAG=false
 # Alpha-changelog path (set to "" to disable the changelog check)
 ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-changelogs/alpha.md}"
 
-# Enforce that version only moves forward (monotonic) — (kept for future use)
+# Enforce that version only moves forward (reserved for future use)
 ENFORCE_MONOTONIC_VERSION="${ENFORCE_MONOTONIC_VERSION:-true}"
 
 # Require GPG checks before allowing signed tag; auto-export GPG_TTY
@@ -199,7 +194,7 @@ prepare_gpg() {
 }
 
 # ----------------------------------------------------------------------
-# 📝 Ensure alpha changelog is updated for this release (content check later)
+# 📝 Ensure alpha changelog is updated for this release (content check)
 # ----------------------------------------------------------------------
 ensure_alpha_changelog_updated() {
   local version="$1"   # e.g., 0.1.0a4
@@ -226,7 +221,7 @@ ensure_alpha_changelog_updated() {
     die "Alpha changelog entry for ${version} (${tag}) is empty. Please add release notes."
   fi
 
-  # Keep this as a warning + confirm, same as your prior logic
+  # Warn if not touched recently; allow override
   if ! git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
     warn "Changelog '$ALPHA_CHANGELOG' not updated in the last commit."
     confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
@@ -284,10 +279,8 @@ require_cmd awk
 # ------------------------------------------------------------------------------
 # ✅ STEP 1: REPO & BRANCH CHECK — RUN FIRST
 # ------------------------------------------------------------------------------
-# Ensure we are in a git repo
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git repository."
 
-# Check branch; offer to switch to RC_BRANCH
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "$RC_BRANCH" ]]; then
   warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$RC_BRANCH'."
@@ -303,6 +296,7 @@ if [[ "$CURRENT_BRANCH" != "$RC_BRANCH" ]]; then
       fi
     fi
 
+    # Checkout/pull target branch
     if git show-ref --verify --quiet "refs/heads/$RC_BRANCH"; then
       git checkout "$RC_BRANCH"
     elif git ls-remote --exit-code --heads "$REMOTE" "$RC_BRANCH" >/dev/null 2>&1; then
@@ -320,30 +314,8 @@ if [[ "$CURRENT_BRANCH" != "$RC_BRANCH" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# ✅ STEP 2: PREFLIGHT CHANGELOG-CHANGES CHECK — RUN SECOND
-#   (Lightweight: checks the file exists and has recent changes in working tree
-#    or last commit. The stricter content/version check still runs later.)
-# ------------------------------------------------------------------------------
-if [[ -n "$ALPHA_CHANGELOG" ]]; then
-  if [[ ! -f "$ALPHA_CHANGELOG" ]]; then
-    warn "Alpha changelog '$ALPHA_CHANGELOG' not found."
-    confirm "Proceed anyway?" "n" || die "Aborting: changelog missing."
-  else
-    if git diff --name-only | grep -qx "$ALPHA_CHANGELOG" \
-       || git diff --name-only --cached | grep -qx "$ALPHA_CHANGELOG" \
-       || git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
-      info "Changelog '$ALPHA_CHANGELOG' has recent changes."
-    else
-      warn "Changelog '$ALPHA_CHANGELOG' shows no recent changes."
-      confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
-    fi
-  fi
-fi
-
-# ------------------------------------------------------------------------------
-# (Everything else continues unchanged)
-# ------------------------------------------------------------------------------
 # Warn on uncommitted changes (script may commit version bump)
+# ------------------------------------------------------------------------------
 if [[ -n "$(git status --porcelain)" ]]; then
   warn "You have uncommitted changes."
   confirm "Continue (script may commit version bump)?" "y" || exit 1
@@ -353,7 +325,9 @@ fi
 [[ -f "$PYPROJECT" ]] || die "Cannot find $PYPROJECT"
 [[ -f "$INIT_FILE"  ]] || die "Cannot find $INIT_FILE"
 
+# ------------------------------------------------------------------------------
 # 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
+# ------------------------------------------------------------------------------
 VENV_DIR="${VENV_DIR:-.venv}"
 VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
 
@@ -374,14 +348,18 @@ if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
   die "pip not available for $($PYTHON_CMD -V 2>/dev/null || echo python). Activate your venv or install pip."
 fi
 
-# 🔍 READ CURRENT VERSIONS
+# ------------------------------------------------------------------------------
+# 🔍 READ CURRENT VERSIONS — from pyproject & __init__
+# ------------------------------------------------------------------------------
 PV="$(get_pyproject_version || true)"
 IV="$(get_init_version || true)"
 echo "Detected versions:"
 echo "  $PYPROJECT version:     ${PV:-<none>}"
 echo "  $INIT_FILE __version__: ${IV:-<none>}"
 
-# 🧭 CHOOSE VERSION
+# ------------------------------------------------------------------------------
+# 🧭 STEP 2: CHOOSE VERSION — confirm which alpha we are releasing
+# ------------------------------------------------------------------------------
 if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$PV"; then
   warn "Version mismatch or not an alpha version (expected PEP 440 like X.Y.ZaN)."
   NEWV="$(ask "Enter alpha version (e.g., 0.1.0a4)" "${PV:-0.1.0a1}")"
@@ -420,14 +398,39 @@ else
   fi
 fi
 
-# 🏷️  DERIVE GIT TAG
+# ------------------------------------------------------------------------------
+# 🏷️  STEP 3: DERIVE GIT TAG — from PEP 440 alpha -> vX.Y.Z-alpha.N
+# ------------------------------------------------------------------------------
 TAG="$(pep440_to_tag "$PV")" || die "Cannot derive tag from $PV"
 echo "Proposed tag: ${BLU}${TAG}${NC} (derived from ${PV})"
 
-# Changelog content/version check (kept here as before)
+# ------------------------------------------------------------------------------
+# 📝 STEP 4: CHANGELOG CHECKS — run after version is confirmed
+#   First: lightweight "recent changes" gate for the changelog file
+#   Then : strict content check for the chosen version/tag
+# ------------------------------------------------------------------------------
+if [[ -n "$ALPHA_CHANGELOG" ]]; then
+  if [[ ! -f "$ALPHA_CHANGELOG" ]]; then
+    warn "Alpha changelog '$ALPHA_CHANGELOG' not found."
+    confirm "Proceed anyway?" "n" || die "Aborting: changelog missing."
+  else
+    if git diff --name-only | grep -qx "$ALPHA_CHANGELOG" \
+       || git diff --name-only --cached | grep -qx "$ALPHA_CHANGELOG" \
+       || git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
+      info "Changelog '$ALPHA_CHANGELOG' has recent changes."
+    else
+      warn "Changelog '$ALPHA_CHANGELOG' shows no recent changes."
+      confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
+    fi
+  fi
+fi
+
+# Strict content/version check (must contain the new version entry & non-empty body)
 ensure_alpha_changelog_updated "$PV" "$TAG"
 
-# 🧪 BUILD & VALIDATE
+# ------------------------------------------------------------------------------
+# 🧪 BUILD & VALIDATE — sdist+wheel, twine metadata check
+# ------------------------------------------------------------------------------
 if ! "$PYTHON_CMD" -c "import build" >/dev/null 2>&1; then
   info "Installing build tooling (build, twine)…"
   "$PYTHON_CMD" -m pip install --upgrade pip >/dev/null
@@ -443,7 +446,9 @@ info "Building sdist & wheel …"
 info "Validating metadata with twine …"
 "$PYTHON_CMD" -m twine check dist/*
 
-# 🧪 OPTIONAL SMOKE TEST
+# ------------------------------------------------------------------------------
+# 🧪 OPTIONAL SMOKE TEST — temp venv
+# ------------------------------------------------------------------------------
 if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
   [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
@@ -503,7 +508,9 @@ fi
 # Ensure we don't clobber an existing tag; offer safe cleanup if needed
 ensure_tag_available "$TAG" "$REMOTE"
 
-# 🔐 CREATE & PUSH TAG
+# ------------------------------------------------------------------------------
+# 🔐 CREATE & PUSH TAG — signed (GPG) or unsigned, to trigger workflow
+# ------------------------------------------------------------------------------
 SIGN="$(ask "Sign tag with GPG? (y/n)" "$SIGN_TAG_DEFAULT")"
 if [[ "$SIGN" =~ ^[Yy]$ ]]; then
   prepare_gpg
