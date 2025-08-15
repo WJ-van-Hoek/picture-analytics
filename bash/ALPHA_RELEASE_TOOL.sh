@@ -25,7 +25,7 @@ set -euo pipefail  # safer bash
 # ------------------------------------------------------------------------------
 PYPROJECT="./pyproject.toml"             # Path to pyproject.toml
 INIT_FILE="./src/scripts/__init__.py"    # Path to __init__.py containing __version__
-RC_BRANCH="alpha-rc"                 # Branch that alpha releases should come from
+RC_BRANCH="rc-alpha"                     # Branch that alpha releases should come from
 REMOTE="origin"                          # Remote to push branch/tag to
 SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
