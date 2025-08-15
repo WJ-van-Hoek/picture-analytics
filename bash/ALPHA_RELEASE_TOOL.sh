@@ -37,6 +37,15 @@ SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: '
 # --- state flags so we can report whether a release actually ran ---
 DID_PUSH_TAG=false
 
+# Alpha-changelog path (set to "" to disable the changelog check)
+ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-CHANGELOG-alpha.md}"
+
+# Enforce that version only moves forward (monotonic)
+ENFORCE_MONOTONIC_VERSION="${ENFORCE_MONOTONIC_VERSION:-true}"
+
+# Require GPG checks before allowing signed tag; auto-export GPG_TTY
+GPG_PREPARE="${GPG_PREPARE:-true}"
+
 # Optional: prefer venv python if active; fallback to system python3
 if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
   PYTHON_CMD="${VIRTUAL_ENV}/bin/python"
@@ -220,6 +229,42 @@ bump_minor_alpha() {
   echo "${M}.$((m+1)).0a1"
 }
 
+# ----------------------------------------------------------------------
+# 🔐 GPG helpers — make signed tagging reliable in TTY/CI
+# ----------------------------------------------------------------------
+prepare_gpg() {
+  [[ "$GPG_PREPARE" == "true" ]] || return 0
+
+  if command -v gpg >/dev/null 2>&1; then
+    # Ensure pinentry can talk to our terminal
+    if [[ -t 1 ]]; then
+      export GPG_TTY="$(tty)"
+    fi
+
+    # If no secret keys, fail early with guidance
+    if ! gpg --list-secret-keys --keyid-format=long >/dev/null 2>&1; then
+      die "No GPG secret keys found. Generate/import a key, then set git config user.signingkey <KEYID>."
+    fi
+
+    # If user.signingkey not set, pick one interactively
+    if ! git config --get user.signingkey >/dev/null; then
+      warn "git config user.signingkey is not set."
+      # Try picking the first available key id
+      local kid
+      kid="$(gpg --list-secret-keys --keyid-format=long | awk '/^sec/{print $2}' | sed 's|.*/||' | head -n1)"
+      if [[ -n "$kid" ]] && confirm "Set user.signingkey to $kid?" "y"; then
+        git config --local user.signingkey "$kid"
+        info "Configured user.signingkey=$kid (local)."
+      else
+        die "No signing key configured. Set one with: git config --local user.signingkey <KEYID>"
+      fi
+    fi
+  else
+    die "gpg not found. Install GnuPG to create signed tags."
+  fi
+}
+
+
 # ------------------------------------------------------------------------------
 # 🚦 PREFLIGHT — environment, repo, branch, cleanliness
 # ------------------------------------------------------------------------------
@@ -227,6 +272,35 @@ require_cmd git
 require_cmd "$PYTHON_CMD"
 require_cmd sed
 require_cmd awk
+
+# ------------------------------------------------------------------------------
+# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
+# ------------------------------------------------------------------------------
+VENV_DIR="${VENV_DIR:-.venv}"
+VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
+
+# If already inside a different venv, deactivate first
+command -v deactivate >/dev/null 2>&1 && deactivate || true
+
+# Create venv only if missing
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating Python virtual environment in $VENV_DIR …"
+  python3 -m venv "$VENV_DIR"
+fi
+
+# Activate venv
+# shellcheck disable=SC1090
+source "$VENV_DIR/bin/activate"
+
+# Ensure the rest of the script uses the venv's Python
+PYTHON_CMD="$VENV_DIR/bin/python"
+
+# Provision build tooling in the venv (idempotent on reuse)
+"$PYTHON_CMD" -m pip install --upgrade pip
+"$PYTHON_CMD" -m pip install --upgrade setuptools wheel build twine
+
+# Install your target payload (defaults to editable local project; override via VENV_PIP_INSTALL)
+pip install "${VENV_PIP_INSTALL:-.}"
 
 # Verify pip is available for chosen Python
 if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
@@ -423,6 +497,7 @@ ensure_tag_available "$TAG" "$REMOTE"
 # ------------------------------------------------------------------------------
 SIGN="$(ask "Sign tag with GPG? (y/n)" "$SIGN_TAG_DEFAULT")"
 if [[ "$SIGN" =~ ^[Yy]$ ]]; then
+  prepare_gpg
   git tag -s "$TAG" -m "Alpha release $PV"
 else
   git tag    "$TAG" -m "Alpha release $PV"
