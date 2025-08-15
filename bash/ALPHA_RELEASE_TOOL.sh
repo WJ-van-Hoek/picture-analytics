@@ -25,7 +25,7 @@ set -euo pipefail  # safer bash
 # ------------------------------------------------------------------------------
 PYPROJECT="./pyproject.toml"             # Path to pyproject.toml
 INIT_FILE="./src/scripts/__init__.py"    # Path to __init__.py containing __version__
-TARGET_BRANCH="develop-alpha"            # Branch that alpha releases should come from
+RC_BRANCH="alpha-rc"                 # Branch that alpha releases should come from
 REMOTE="origin"                          # Remote to push branch/tag to
 SIGN_TAG_DEFAULT="n"                     # Default for "sign git tag?" prompt: 'y' or 'n'
 
@@ -247,20 +247,20 @@ require_cmd awk
 # Ensure we are in a git repo
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git repository."
 
-# Check branch; offer to switch to TARGET_BRANCH
+# Check branch; offer to switch to RC_BRANCH
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
-  warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$TARGET_BRANCH'."
-  if confirm "Switch to '$TARGET_BRANCH' now?" "y"; then
-    if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
-      git checkout "$TARGET_BRANCH"
-    elif git ls-remote --exit-code --heads "$REMOTE" "$TARGET_BRANCH" >/dev/null 2>&1; then
-      git fetch "$REMOTE" "$TARGET_BRANCH"
-      git checkout "$TARGET_BRANCH"
+if [[ "$CURRENT_BRANCH" != "$RC_BRANCH" ]]; then
+  warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$RC_BRANCH'."
+  if confirm "Switch to '$RC_BRANCH' now?" "y"; then
+    if git show-ref --verify --quiet "refs/heads/$RC_BRANCH"; then
+      git checkout "$RC_BRANCH"
+    elif git ls-remote --exit-code --heads "$REMOTE" "$RC_BRANCH" >/dev/null 2>&1; then
+      git fetch "$REMOTE" "$RC_BRANCH"
+      git checkout "$RC_BRANCH"
     else
-      die "Branch '$TARGET_BRANCH' does not exist locally or on '$REMOTE'."
+      die "Branch '$RC_BRANCH' does not exist locally or on '$REMOTE'."
     fi
-    CURRENT_BRANCH="$TARGET_BRANCH"
+    CURRENT_BRANCH="$RC_BRANCH"
     info "Switched to branch '$CURRENT_BRANCH'."
     git status -sb || true
   else
