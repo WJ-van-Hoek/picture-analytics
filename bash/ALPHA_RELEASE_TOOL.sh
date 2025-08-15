@@ -265,6 +265,31 @@ prepare_gpg() {
   fi
 }
 
+# ----------------------------------------------------------------------
+# 📝 Ensure alpha changelog is updated for this release
+# ----------------------------------------------------------------------
+# Configurable: set ALPHA_CHANGELOG env var before running script
+# Default: CHANGELOG-alpha.md in repo root
+ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-CHANGELOG-alpha.md}"
+
+ensure_alpha_changelog_updated() {
+  local version="$1"   # e.g., 0.1.0a4
+  local tag="$2"       # e.g., v0.1.0-alpha.4
+
+  [[ -n "$ALPHA_CHANGELOG" ]] || return 0
+  [[ -f "$ALPHA_CHANGELOG" ]] || die "Alpha changelog '$ALPHA_CHANGELOG' not found."
+
+  # Must contain either the version string or the tag
+  if ! grep -E -q "(^|[^0-9A-Za-z])${version}([^0-9A-Za-z]|$)|(^|[^0-9A-Za-z])${tag}([^0-9A-Za-z]|$)" "$ALPHA_CHANGELOG"; then
+    die "Alpha changelog '$ALPHA_CHANGELOG' does not contain an entry for ${version} (${tag}). Please update it."
+  fi
+
+  # Optional: ensure it was changed in the most recent commit
+  if ! git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
+    warn "Changelog '$ALPHA_CHANGELOG' not updated in the last commit."
+    confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
+  fi
+}
 
 # ------------------------------------------------------------------------------
 # 🚦 PREFLIGHT — environment, repo, branch, cleanliness
@@ -402,6 +427,8 @@ fi
 # ------------------------------------------------------------------------------
 TAG="$(pep440_to_tag "$PV")" || die "Cannot derive tag from $PV"
 echo "Proposed tag: ${BLU}${TAG}${NC} (derived from ${PV})"
+
+ensure_alpha_changelog_updated "$PV" "$TAG"
 
 # ------------------------------------------------------------------------------
 # 🧪 BUILD & VALIDATE — sdist+wheel, twine metadata check
