@@ -25,7 +25,7 @@ recent_changes_gate() {
   fi
 
   if [[ "$changed" != true ]]; then
-    die "Changelog '$ALPHA_CHANGELOG' shows no recent updates. Update it for this alpha release and stage/commit the change."
+    die "Changelog '$ALPHA_CHANGELOG' shows no recent updates. Update it for this alpha release and commit the change."
   fi
 
   info "Changelog '$ALPHA_CHANGELOG' has recent updates."
