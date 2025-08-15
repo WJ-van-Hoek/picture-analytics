@@ -233,6 +233,46 @@ ensure_alpha_changelog_updated() {
   fi
 }
 
+# ----------------------------------------------------------------------
+# 💾 Commit WIP before switching branches (optional)
+# ----------------------------------------------------------------------
+commit_wip_before_switch() {
+  # If truly nothing to commit (tracked, staged, or untracked), just return
+  if git diff --quiet && git diff --cached --quiet && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
+    info "No changes to commit on '$CURRENT_BRANCH'."
+    return 0
+  fi
+
+  echo
+  echo "Current working tree on '$CURRENT_BRANCH':"
+  git -c color.status=always status -sb || true
+  echo
+
+  # Include untracked files too?
+  if confirm "Add ALL changes including untracked files (git add -A)?" "y"; then
+    git add -A
+  else
+    git add -u
+  fi
+
+  # If nothing actually got staged, skip commit
+  if git diff --cached --quiet; then
+    warn "No staged changes after add; skipping commit."
+  else
+    local msg
+    msg="$(ask "Commit message" "chore: WIP before switching to $RC_BRANCH")"
+    git commit -m "$msg"
+    info "Committed WIP on '$CURRENT_BRANCH'."
+  fi
+
+  # Optional push
+  if confirm "Push '$CURRENT_BRANCH' to '$REMOTE' now?" "n"; then
+    git push "$REMOTE" "$CURRENT_BRANCH"
+    DID_PUSH_BRANCH=true
+    info "Pushed branch '$CURRENT_BRANCH' to '$REMOTE'."
+  fi
+}
+
 # ------------------------------------------------------------------------------
 # 🚦 PREFLIGHT — REQUIRED CMDS
 # ------------------------------------------------------------------------------
@@ -252,6 +292,17 @@ CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "$RC_BRANCH" ]]; then
   warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$RC_BRANCH'."
   if confirm "Switch to '$RC_BRANCH' now?" "y"; then
+
+    # Offer to commit before switching if there are changes
+    if [[ -n "$(git status --porcelain)" ]]; then
+      warn "You have uncommitted changes on '$CURRENT_BRANCH'."
+      if confirm "Commit these changes on '$CURRENT_BRANCH' before switching?" "y"; then
+        commit_wip_before_switch
+      else
+        warn "Proceeding without committing changes."
+      fi
+    fi
+
     if git show-ref --verify --quiet "refs/heads/$RC_BRANCH"; then
       git checkout "$RC_BRANCH"
     elif git ls-remote --exit-code --heads "$REMOTE" "$RC_BRANCH" >/dev/null 2>&1; then
