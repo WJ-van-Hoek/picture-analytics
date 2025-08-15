@@ -82,32 +82,6 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-# ------------------------------------------------------------------------------
-# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
-# ------------------------------------------------------------------------------
-VENV_DIR="${VENV_DIR:-.venv}"
-VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
-
-# If already inside a different venv, deactivate first
-command -v deactivate >/dev/null 2>&1 && deactivate || true
-
-# Create venv only if missing
-if [[ ! -d "$VENV_DIR" ]]; then
-  echo "Creating Python virtual environment in $VENV_DIR …"
-  python3 -m venv "$VENV_DIR"
-fi
-
-# Activate venv
-# shellcheck disable=SC1090
-source "$VENV_DIR/bin/activate"
-
-# Ensure the rest of the script uses the venv's Python
-PYTHON_CMD="$VENV_DIR/bin/python"
-
-# Upgrade pip and install package (if not already installed)
-pip install --upgrade pip
-pip install "$VENV_PIP_INSTALL"
-
 # Remove build artifacts created during this run
 clean_artifacts() {
   echo "Removing build artifacts: dist/, build/, *.egg-info"
@@ -299,6 +273,35 @@ require_cmd git
 require_cmd "$PYTHON_CMD"
 require_cmd sed
 require_cmd awk
+
+# ------------------------------------------------------------------------------
+# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
+# ------------------------------------------------------------------------------
+VENV_DIR="${VENV_DIR:-.venv}"
+VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
+
+# If already inside a different venv, deactivate first
+command -v deactivate >/dev/null 2>&1 && deactivate || true
+
+# Create venv only if missing
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating Python virtual environment in $VENV_DIR …"
+  python3 -m venv "$VENV_DIR"
+fi
+
+# Activate venv
+# shellcheck disable=SC1090
+source "$VENV_DIR/bin/activate"
+
+# Ensure the rest of the script uses the venv's Python
+PYTHON_CMD="$VENV_DIR/bin/python"
+
+# Provision build tooling in the venv (idempotent on reuse)
+"$PYTHON_CMD" -m pip install --upgrade pip
+"$PYTHON_CMD" -m pip install --upgrade setuptools wheel build twine
+
+# Install your target payload (defaults to editable local project; override via VENV_PIP_INSTALL)
+pip install "${VENV_PIP_INSTALL:-.}"
 
 # Verify pip is available for chosen Python
 if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
