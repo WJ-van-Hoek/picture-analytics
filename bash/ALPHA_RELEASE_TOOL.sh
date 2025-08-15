@@ -83,40 +83,29 @@ require_cmd() {
 }
 
 # ------------------------------------------------------------------------------
-# 🐍 ALWAYS-ON VENV — clean, reproducible Python for the whole run
-#   - Controlled by optional env vars:
-#       VENV_DIR=".venv"              # where to create the venv
-#       VENV_CLEAR="true"             # remove existing venv before creating
-#       VENV_PIP_INSTALL="<package>"  # what to pip install inside the venv
-#                                     # default installs the local project in editable mode: "."
+# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
 # ------------------------------------------------------------------------------
 VENV_DIR="${VENV_DIR:-.venv}"
-VENV_CLEAR="${VENV_CLEAR:-true}"
-VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"
+VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
 
-# If we were already in a venv, cleanly reset PATH by deactivating (if defined)
-# shellcheck disable=SC1090,SC2312
+# If already inside a different venv, deactivate first
 command -v deactivate >/dev/null 2>&1 && deactivate || true
 
-if [[ -d "$VENV_DIR" && "$VENV_CLEAR" == "true" ]]; then
-  echo "Removing existing venv at $VENV_DIR …"
-  rm -rf "$VENV_DIR"
+# Create venv only if missing
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating Python virtual environment in $VENV_DIR …"
+  python3 -m venv "$VENV_DIR"
 fi
 
-# Create and activate the venv (fall back to system python3 if PYTHON_CMD isn't usable yet)
-("${PYTHON_CMD:-python3}" -m venv "$VENV_DIR") || python3 -m venv "$VENV_DIR"
-
+# Activate venv
 # shellcheck disable=SC1090
 source "$VENV_DIR/bin/activate"
 
 # Ensure the rest of the script uses the venv's Python
 PYTHON_CMD="$VENV_DIR/bin/python"
 
-# Upgrade pip and install the requested package (or the repo itself by default)
+# Upgrade pip and install package (if not already installed)
 pip install --upgrade pip
-# If you want a specific external package each time, set: VENV_PIP_INSTALL="your-package-name"
-# For your original ask ("pip install <package>"), set it before running the script:
-#   VENV_PIP_INSTALL="somepkg" bash bash/ALPHA_RELEASE_TOOL.sh
 pip install "$VENV_PIP_INSTALL"
 
 # Remove build artifacts created during this run
