@@ -268,6 +268,20 @@ commit_wip_before_switch() {
   fi
 }
 
+# ----------------------------------------------------------------------
+# ✅ Final confirmation before building
+# ----------------------------------------------------------------------
+confirm_release_version() {
+  local v="$1" t="$2"
+  echo
+  echo "About to build and release:"
+  echo "  Version: $v"
+  echo "  Tag:     $t"
+  echo "  Branch:  $CURRENT_BRANCH"
+  [[ -n "$ALPHA_CHANGELOG" ]] && echo "  Changelog: $ALPHA_CHANGELOG"
+  confirm "Proceed with building this version?" "y"
+}
+
 # ------------------------------------------------------------------------------
 # 🚦 PREFLIGHT — REQUIRED CMDS
 # ------------------------------------------------------------------------------
@@ -427,6 +441,11 @@ fi
 
 # Strict content/version check (must contain the new version entry & non-empty body)
 ensure_alpha_changelog_updated "$PV" "$TAG"
+
+# Final confirmation before building
+if ! confirm_release_version "$PV" "$TAG"; then
+  die "Release cancelled by user."
+fi
 
 # ------------------------------------------------------------------------------
 # 🧪 BUILD & VALIDATE — sdist+wheel, twine metadata check
