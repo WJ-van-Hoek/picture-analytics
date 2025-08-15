@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve repo root (…/bin/alpha-release/main-tool.sh -> repo root)
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# --- Resolve repo root (prefer Git; fallback to path math) ---
+if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  :
+else
+  # main-tool.sh is at <repo>/bash/bin/alpha-release/main-tool.sh -> repo root is ../../..
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+fi
 cd "$REPO_ROOT"
 
-# Load config first
-source "config/alpha.sh"
+# --- Load config & libs from bash/ ---
+source "bash/config/alpha.sh"
 
-# Load libs
-source "lib/common.sh"
-source "lib/git.sh"
-source "lib/version.sh"
-source "lib/changelog.sh"
-source "lib/venv.sh"
-source "lib/gpg.sh"
-source "lib/build_and_validate.sh"
-source "lib/tag_and_push.sh"
-source "lib/finalize.sh"
+source "bash/lib/common.sh"
+source "bash/lib/git.sh"
+source "bash/lib/version.sh"
+source "bash/lib/changelog.sh"
+source "bash/lib/venv.sh"
+source "bash/lib/gpg.sh"
+source "bash/lib/build_and_validate.sh"
+source "bash/lib/tag_and_push.sh"
+source "bash/lib/finalize.sh"
 
-# ---- Execution order (keep this as the source of truth) ----
+# --- Execution order ---
 step_branch_and_prechecks          # 1) RC branch check (+ optional WIP commit), key files
 step_env_prepare                   # 2) Venv/tooling only (no build)
 step_version_select                # 3) Choose/confirm alpha version, commit bump if changed
