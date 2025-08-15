@@ -4,7 +4,7 @@ INIT_FILE="${INIT_FILE:-./src/scripts/__init__.py}"
 ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-changelogs/alpha.md}"
 
 # Branching / git
-RC_BRANCH="${RC_BRANCH:-alpha-rc}"
+RC_BRANCH="${RC_BRANCH:-rc-alpha}"
 REMOTE="${REMOTE:-origin}"
 SIGN_TAG_DEFAULT="${SIGN_TAG_DEFAULT:-n}"
 
