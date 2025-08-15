@@ -10,7 +10,7 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 PYPROJECT="./pyproject.toml"
 INIT_FILE="./src/scripts/__init__.py"
-RC_BRANCH="alpha-rc"                     # target branch for alpha releases
+RC_BRANCH="rc-alpha"                     # target branch for alpha releases
 REMOTE="origin"
 SIGN_TAG_DEFAULT="n"
 
