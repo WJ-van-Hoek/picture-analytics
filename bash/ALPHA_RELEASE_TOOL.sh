@@ -16,14 +16,9 @@
 # Usage:
 #   chmod +x bash/ALPHA_RELEASE_TOOL.sh
 #   bash bash/ALPHA_RELEASE_TOOL.sh
-#
-# Notes:
-#   - Adjust INIT_FILE and smoke test import if your package path/name differs.
-#   - This script uses system `python3`. If you prefer a venv, activate it first
-#     or adapt PYTHON_CMD below to point to your venv’s python.
 # ==============================================================================
 
-set -euo pipefail  # safer bash: fail on errors/undefined vars; pipefail propagates failures
+set -euo pipefail  # safer bash
 
 # ------------------------------------------------------------------------------
 # 🔧 CONFIGURATION — tailor these to your repository layout
@@ -39,9 +34,9 @@ DID_PUSH_BRANCH=false
 DID_PUSH_TAG=false
 
 # Alpha-changelog path (set to "" to disable the changelog check)
-ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-CHANGELOG-alpha.md}"
+ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-changelogs/alpha.md}"
 
-# Enforce that version only moves forward (monotonic)
+# Enforce that version only moves forward (monotonic) — (kept for future use)
 ENFORCE_MONOTONIC_VERSION="${ENFORCE_MONOTONIC_VERSION:-true}"
 
 # Require GPG checks before allowing signed tag; auto-export GPG_TTY
@@ -60,14 +55,12 @@ fi
 RED="$(printf '\033[31m')"; GRN="$(printf '\033[32m')"; YEL="$(printf '\033[33m')"; BLU="$(printf '\033[34m')"; NC="$(printf '\033[0m')"
 
 ask() {
-  # ask "Question" "default" -> echoes answer (or default if empty)
   local q="$1"; local d="${2:-}"
   read -r -p "$(printf "${BLU}?${NC} %s %s " "$q" "${d:+[$d]}")" ans || true
   echo "${ans:-$d}"
 }
 
 confirm() {
-  # confirm "Question" "default(y/n)" -> returns 0 for yes, 1 for no
   local q="$1"; local d="${2:-y}"
   local ans; ans="$(ask "$q" "$d")"
   [[ "$ans" =~ ^[Yy]$ ]]
@@ -77,10 +70,7 @@ die()  { echo -e "${RED}✖ $*${NC}"; exit 1; }
 info() { echo -e "${GRN}✔${NC} $*"; }
 warn() { echo -e "${YEL}!${NC} $*"; }
 
-require_cmd() {
-  # require_cmd <name> -> exits if command is missing
-  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
-}
+require_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"; }
 
 # Remove build artifacts created during this run
 clean_artifacts() {
@@ -91,13 +81,9 @@ clean_artifacts() {
 
 # ----------------------------------------------------------------------
 # 🔎 ensure_tag_available — verify a tag doesn't exist or offer safe cleanup
-#   - Uses gh CLI (if available) to detect a GitHub Release for the tag.
-#   - Without gh, only allows deletion if the tag isn't on the remote.
 # ----------------------------------------------------------------------
 ensure_tag_available() {
   local tag="$1" remote="$2"
-
-  # Does the tag exist locally?
   if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
     warn "Tag '$tag' already exists locally."
     local exists_remote=false
@@ -106,7 +92,6 @@ ensure_tag_available() {
       warn "Tag '$tag' also exists on remote '$remote'."
     fi
 
-    # If gh CLI is available, check for a GitHub Release for this tag
     local release_exists="unknown"
     if command -v gh >/dev/null 2>&1; then
       if gh release view "$tag" >/dev/null 2>&1; then
@@ -116,7 +101,6 @@ ensure_tag_available() {
       fi
     fi
 
-    # Decision matrix
     if [[ "$release_exists" == "yes" ]]; then
       die "A GitHub Release for '$tag' exists. Do NOT delete this tag. Please bump version instead."
     fi
@@ -126,16 +110,14 @@ ensure_tag_available() {
         warn "Cannot verify GitHub Release state (gh not installed). Refusing to delete remote tag."
         die "Please bump version or install GitHub CLI (https://cli.github.com/) to allow safe checks."
       fi
-      # No release exists; allow remote+local deletion with explicit confirmation
       if confirm "Delete tag '$tag' from remote '$remote' and locally (no release found)?" "n"; then
-        git push "$remote" ":refs/tags/$tag"   # delete remote tag
-        git tag -d "$tag"                      # delete local tag
+        git push "$remote" ":refs/tags/$tag"
+        git tag -d "$tag"
         info "Deleted tag '$tag' on remote and locally."
       else
         die "Tag '$tag' exists. Aborting to avoid accidental overwrite."
       fi
     else
-      # Only local tag exists; allow local deletion
       if confirm "Delete local tag '$tag' (no remote tag found)?" "y"; then
         git tag -d "$tag"
         info "Deleted local tag '$tag'."
@@ -149,15 +131,8 @@ ensure_tag_available() {
 # ------------------------------------------------------------------------------
 # 🧩 VERSION IO HELPERS — read/update versions in files
 # ------------------------------------------------------------------------------
-get_pyproject_version() {
-  # Extracts: version = "X.Y.ZaN" from pyproject.toml (first occurrence)
-  awk -F '"' '/^\s*version\s*=\s*"/ {print $2; exit}' "$PYPROJECT"
-}
-
-get_init_version() {
-  # Extracts: __version__ = "X.Y.ZaN" from __init__.py
-  awk -F '"' '/__version__\s*=\s*"/ {print $2; exit}' "$INIT_FILE"
-}
+get_pyproject_version() { awk -F '"' '/^\s*version\s*=\s*"/ {print $2; exit}' "$PYPROJECT"; }
+get_init_version()      { awk -F '"' '/__version__\s*=\s*"/ {print $2; exit}' "$INIT_FILE"; }
 
 set_versions() {
   local new="$1"
@@ -168,7 +143,6 @@ initf     = pathlib.Path(sys.argv[2])
 new       = sys.argv[3]
 
 def sub_pyproject(p):
-    # Match: version = "X"  or  version = 'X'  (first occurrence wins)
     pat = re.compile(r'(?m)^(\s*version\s*=\s*)(["\'])([^"\']+)(\2)')
     txt = p.read_text(encoding='utf-8')
     txt, n = pat.subn(lambda m: f'{m.group(1)}{m.group(2)}{new}{m.group(2)}', txt, count=1)
@@ -177,7 +151,6 @@ def sub_pyproject(p):
     p.write_text(txt, encoding='utf-8')
 
 def sub_init(p):
-    # Match: __version__ = "X"  or  __version__ = 'X' at start of line
     pat = re.compile(r'(?m)^(\s*__version__\s*=\s*)(["\'])([^"\']*)(\2)')
     txt = p.read_text(encoding='utf-8')
     txt, n = pat.subn(lambda m: f'{m.group(1)}{m.group(2)}{new}{m.group(2)}', txt, count=1)
@@ -191,66 +164,26 @@ PY
 }
 
 # ------------------------------------------------------------------------------
-# 🔢 VERSION MATH (ALPHA ONLY) — validate/bump/convert
+# 🔢 VERSION MATH (ALPHA ONLY)
 # ------------------------------------------------------------------------------
-is_alpha_pep440() {
-  # Validates PEP 440 alpha: X.Y.ZaN (e.g., 0.1.0a4)
-  [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]]
-}
-
-pep440_to_tag() {
-  # Converts PEP 440 alpha -> git tag used by workflow:
-  #   0.1.0a4  -> v0.1.0-alpha.4
-  local v="$1"
-  [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]] || return 1
-  echo "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-alpha.${BASH_REMATCH[4]}"
-}
-
-bump_alpha() {
-  # 0.1.0a4 -> 0.1.0a5
-  local v="$1"
-  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
-  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}" a="${BASH_REMATCH[4]}"
-  echo "${M}.${m}.${p}a$((a+1))"
-}
-
-bump_patch_alpha() {
-  # 0.1.0a4 -> 0.1.1a1  (increment PATCH, reset alpha counter)
-  local v="$1"
-  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
-  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}"
-  echo "${M}.${m}.$((p+1))a1"
-}
-
-bump_minor_alpha() {
-  # 0.1.0a4 -> 0.2.0a1  (increment MINOR, reset PATCH & alpha)
-  local v="$1"
-  is_alpha_pep440 "$v" || die "Not an alpha version: $v"
-  local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}"
-  echo "${M}.$((m+1)).0a1"
-}
+is_alpha_pep440() { [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]]; }
+pep440_to_tag()   { [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]] || return 1; echo "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-alpha.${BASH_REMATCH[4]}"; }
+bump_alpha()      { is_alpha_pep440 "$1" || die "Not an alpha version: $1"; local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}" a="${BASH_REMATCH[4]}"; echo "${M}.${m}.${p}a$((a+1))"; }
+bump_patch_alpha(){ is_alpha_pep440 "$1" || die "Not an alpha version: $1"; local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}"; echo "${M}.${m}.$((p+1))a1"; }
+bump_minor_alpha(){ is_alpha_pep440 "$1" || die "Not an alpha version: $1"; local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}"; echo "${M}.$((m+1)).0a1"; }
 
 # ----------------------------------------------------------------------
 # 🔐 GPG helpers — make signed tagging reliable in TTY/CI
 # ----------------------------------------------------------------------
 prepare_gpg() {
   [[ "$GPG_PREPARE" == "true" ]] || return 0
-
   if command -v gpg >/dev/null 2>&1; then
-    # Ensure pinentry can talk to our terminal
-    if [[ -t 1 ]]; then
-      export GPG_TTY="$(tty)"
-    fi
-
-    # If no secret keys, fail early with guidance
+    [[ -t 1 ]] && export GPG_TTY="$(tty)"
     if ! gpg --list-secret-keys --keyid-format=long >/dev/null 2>&1; then
       die "No GPG secret keys found. Generate/import a key, then set git config user.signingkey <KEYID>."
     fi
-
-    # If user.signingkey not set, pick one interactively
     if ! git config --get user.signingkey >/dev/null; then
       warn "git config user.signingkey is not set."
-      # Try picking the first available key id
       local kid
       kid="$(gpg --list-secret-keys --keyid-format=long | awk '/^sec/{print $2}' | sed 's|.*/||' | head -n1)"
       if [[ -n "$kid" ]] && confirm "Set user.signingkey to $kid?" "y"; then
@@ -266,12 +199,8 @@ prepare_gpg() {
 }
 
 # ----------------------------------------------------------------------
-# 📝 Ensure alpha changelog is updated for this release
+# 📝 Ensure alpha changelog is updated for this release (content check later)
 # ----------------------------------------------------------------------
-# Configurable: set ALPHA_CHANGELOG env var before running script
-# Default: CHANGELOG-alpha.md in repo root
-ALPHA_CHANGELOG="${ALPHA_CHANGELOG:-changelogs/alpha.md}"
-
 ensure_alpha_changelog_updated() {
   local version="$1"   # e.g., 0.1.0a4
   local tag="$2"       # e.g., v0.1.0-alpha.4
@@ -279,13 +208,11 @@ ensure_alpha_changelog_updated() {
   [[ -n "$ALPHA_CHANGELOG" ]] || return 0
   [[ -f "$ALPHA_CHANGELOG" ]] || die "Alpha changelog '$ALPHA_CHANGELOG' not found."
 
-  # Accept either version string or tag format
   local header_pattern="(^##\s+${version}\b)|(^##\s+${tag}\b)"
   if ! grep -Eq "$header_pattern" "$ALPHA_CHANGELOG"; then
     die "Alpha changelog '$ALPHA_CHANGELOG' does not contain an entry for ${version} (${tag}). Please update it."
   fi
 
-  # Extract the section for this version until the next '##' header
   local section
   section="$(awk -v ver="$version" -v tag="$tag" '
     BEGIN { found=0 }
@@ -294,15 +221,12 @@ ensure_alpha_changelog_updated() {
     found { print }
   ' "$ALPHA_CHANGELOG")"
 
-  # Trim whitespace
   section="$(echo "$section" | sed '/^[[:space:]]*$/d')"
-
-  # Check if the section has any non-empty lines
   if [[ -z "$section" ]]; then
     die "Alpha changelog entry for ${version} (${tag}) is empty. Please add release notes."
   fi
 
-  # Optional: ensure it was changed in the last commit
+  # Keep this as a warning + confirm, same as your prior logic
   if ! git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
     warn "Changelog '$ALPHA_CHANGELOG' not updated in the last commit."
     confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
@@ -310,7 +234,7 @@ ensure_alpha_changelog_updated() {
 }
 
 # ------------------------------------------------------------------------------
-# 🚦 PREFLIGHT — environment, repo, branch, cleanliness
+# 🚦 PREFLIGHT — REQUIRED CMDS
 # ------------------------------------------------------------------------------
 require_cmd git
 require_cmd "$PYTHON_CMD"
@@ -318,39 +242,8 @@ require_cmd sed
 require_cmd awk
 
 # ------------------------------------------------------------------------------
-# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
+# ✅ STEP 1: REPO & BRANCH CHECK — RUN FIRST
 # ------------------------------------------------------------------------------
-VENV_DIR="${VENV_DIR:-.venv}"
-VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
-
-# If already inside a different venv, deactivate first
-command -v deactivate >/dev/null 2>&1 && deactivate || true
-
-# Create venv only if missing
-if [[ ! -d "$VENV_DIR" ]]; then
-  echo "Creating Python virtual environment in $VENV_DIR …"
-  python3 -m venv "$VENV_DIR"
-fi
-
-# Activate venv
-# shellcheck disable=SC1090
-source "$VENV_DIR/bin/activate"
-
-# Ensure the rest of the script uses the venv's Python
-PYTHON_CMD="$VENV_DIR/bin/python"
-
-# Provision build tooling in the venv (idempotent on reuse)
-"$PYTHON_CMD" -m pip install --upgrade pip
-"$PYTHON_CMD" -m pip install --upgrade setuptools wheel build twine
-
-# Install your target payload (defaults to editable local project; override via VENV_PIP_INSTALL)
-pip install "${VENV_PIP_INSTALL:-.}"
-
-# Verify pip is available for chosen Python
-if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
-  die "pip not available for $($PYTHON_CMD -V 2>/dev/null || echo python). Activate your venv or install pip."
-fi
-
 # Ensure we are in a git repo
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not in a git repository."
 
@@ -359,7 +252,6 @@ CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
   warn "You are on branch '$CURRENT_BRANCH', but workflow targets '$TARGET_BRANCH'."
   if confirm "Switch to '$TARGET_BRANCH' now?" "y"; then
-    # If local branch exists, checkout; else try fetching remote branch
     if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
       git checkout "$TARGET_BRANCH"
     elif git ls-remote --exit-code --heads "$REMOTE" "$TARGET_BRANCH" >/dev/null 2>&1; then
@@ -376,6 +268,30 @@ if [[ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
   fi
 fi
 
+# ------------------------------------------------------------------------------
+# ✅ STEP 2: PREFLIGHT CHANGELOG-CHANGES CHECK — RUN SECOND
+#   (Lightweight: checks the file exists and has recent changes in working tree
+#    or last commit. The stricter content/version check still runs later.)
+# ------------------------------------------------------------------------------
+if [[ -n "$ALPHA_CHANGELOG" ]]; then
+  if [[ ! -f "$ALPHA_CHANGELOG" ]]; then
+    warn "Alpha changelog '$ALPHA_CHANGELOG' not found."
+    confirm "Proceed anyway?" "n" || die "Aborting: changelog missing."
+  else
+    if git diff --name-only | grep -qx "$ALPHA_CHANGELOG" \
+       || git diff --name-only --cached | grep -qx "$ALPHA_CHANGELOG" \
+       || git diff --name-only HEAD~1..HEAD | grep -qx "$ALPHA_CHANGELOG"; then
+      info "Changelog '$ALPHA_CHANGELOG' has recent changes."
+    else
+      warn "Changelog '$ALPHA_CHANGELOG' shows no recent changes."
+      confirm "Proceed anyway?" "n" || die "Aborting: changelog not updated."
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------------------------
+# (Everything else continues unchanged)
+# ------------------------------------------------------------------------------
 # Warn on uncommitted changes (script may commit version bump)
 if [[ -n "$(git status --porcelain)" ]]; then
   warn "You have uncommitted changes."
@@ -386,21 +302,36 @@ fi
 [[ -f "$PYPROJECT" ]] || die "Cannot find $PYPROJECT"
 [[ -f "$INIT_FILE"  ]] || die "Cannot find $INIT_FILE"
 
-# ------------------------------------------------------------------------------
-# 🔍 READ CURRENT VERSIONS — from pyproject & __init__
-# ------------------------------------------------------------------------------
+# 🐍 ALWAYS-ON VENV — reuse if exists, create if missing
+VENV_DIR="${VENV_DIR:-.venv}"
+VENV_PIP_INSTALL="${VENV_PIP_INSTALL:-.}"  # default installs local project in editable mode
+
+command -v deactivate >/dev/null 2>&1 && deactivate || true
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating Python virtual environment in $VENV_DIR …"
+  python3 -m venv "$VENV_DIR"
+fi
+# shellcheck disable=SC1090
+source "$VENV_DIR/bin/activate"
+PYTHON_CMD="$VENV_DIR/bin/python"
+"$PYTHON_CMD" -m pip install --upgrade pip
+"$PYTHON_CMD" -m pip install --upgrade setuptools wheel build twine
+pip install "${VENV_PIP_INSTALL:-.}"
+
+# Verify pip is available for chosen Python
+if ! "$PYTHON_CMD" -m pip >/dev/null 2>&1; then
+  die "pip not available for $($PYTHON_CMD -V 2>/dev/null || echo python). Activate your venv or install pip."
+fi
+
+# 🔍 READ CURRENT VERSIONS
 PV="$(get_pyproject_version || true)"
 IV="$(get_init_version || true)"
-
 echo "Detected versions:"
 echo "  $PYPROJECT version:     ${PV:-<none>}"
 echo "  $INIT_FILE __version__: ${IV:-<none>}"
 
-# ------------------------------------------------------------------------------
-# 🧭 CHOOSE VERSION — fix mismatches or offer bumps even if consistent
-# ------------------------------------------------------------------------------
+# 🧭 CHOOSE VERSION
 if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$PV"; then
-  # If missing/mismatched/not-alpha: ask explicitly for a correct alpha version
   warn "Version mismatch or not an alpha version (expected PEP 440 like X.Y.ZaN)."
   NEWV="$(ask "Enter alpha version (e.g., 0.1.0a4)" "${PV:-0.1.0a1}")"
   is_alpha_pep440 "$NEWV" || die "Version '$NEWV' is not alpha (expected X.Y.ZaN)."
@@ -411,7 +342,6 @@ if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$P
   PV="$NEWV"; IV="$NEWV"
   info "Versions updated and committed."
 else
-  # Versions are consistent alpha; offer a menu for bump strategies
   info "Versions are consistent and alpha: $PV"
   echo
   echo "Choose a version action:"
@@ -429,7 +359,6 @@ else
     5) NEWV="$(ask "Enter alpha version (X.Y.ZaN)" "$PV")"; is_alpha_pep440 "$NEWV" || die "Not alpha: $NEWV" ;;
     *) die "Invalid choice";;
   esac
-
   if [[ "$NEWV" != "$PV" ]]; then
     echo "Updating versions to $NEWV …"
     set_versions "$NEWV"
@@ -440,49 +369,37 @@ else
   fi
 fi
 
-# ------------------------------------------------------------------------------
-# 🏷️  DERIVE GIT TAG — from PEP 440 alpha -> vX.Y.Z-alpha.N
-# ------------------------------------------------------------------------------
+# 🏷️  DERIVE GIT TAG
 TAG="$(pep440_to_tag "$PV")" || die "Cannot derive tag from $PV"
 echo "Proposed tag: ${BLU}${TAG}${NC} (derived from ${PV})"
 
+# Changelog content/version check (kept here as before)
 ensure_alpha_changelog_updated "$PV" "$TAG"
 
-# ------------------------------------------------------------------------------
-# 🧪 BUILD & VALIDATE — sdist+wheel, twine metadata check
-# ------------------------------------------------------------------------------
-# Ensure build tooling present in the chosen Python environment
+# 🧪 BUILD & VALIDATE
 if ! "$PYTHON_CMD" -c "import build" >/dev/null 2>&1; then
   info "Installing build tooling (build, twine)…"
   "$PYTHON_CMD" -m pip install --upgrade pip >/dev/null
   "$PYTHON_CMD" -m pip install build twine >/dev/null
 fi
 
-# Clean old artifacts to avoid accidentally re-uploading stale files
 info "Cleaning dist/ build/ *.egg-info …"
 rm -rf dist build *.egg-info
 
-# Create fresh artifacts
 info "Building sdist & wheel …"
 "$PYTHON_CMD" -m build
 
-# Validate metadata (README rendering, classifiers, etc.)
 info "Validating metadata with twine …"
 "$PYTHON_CMD" -m twine check dist/*
 
-# ------------------------------------------------------------------------------
-# 🧪 OPTIONAL SMOKE TEST — use a temporary venv (no traces left behind)
-# ------------------------------------------------------------------------------
+# 🧪 OPTIONAL SMOKE TEST
 if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   WHEEL="$(ls dist/*.whl | head -n1)"
   [[ -n "$WHEEL" ]] || die "No wheel found in dist/"
 
-  # Derive importable top-level module name from INIT_FILE path
-  # e.g., INIT_FILE="src/analytics/__init__.py" -> MODULE_IMPORT="analytics"
   MODULE_IMPORT="$(basename "$(dirname "$INIT_FILE")")"
   [[ -n "$MODULE_IMPORT" ]] || die "Could not derive module name from INIT_FILE=$INIT_FILE"
 
-  # Create a throwaway venv for the smoke test
   SMOKE_VENV=".smoke-venv"
   rm -rf "$SMOKE_VENV"
   "$PYTHON_CMD" -m venv "$SMOKE_VENV"
@@ -493,7 +410,6 @@ if confirm "Run local smoke install from built wheel (temp venv)?" "y"; then
   echo "Running strict smoke test (no dependencies)…"
   "$SMOKE_PY" -m pip install --no-deps "$WHEEL" >/dev/null
 
-  # First try import without dependencies (strict mode)
   set +e
   "$SMOKE_PY" - <<PY
 import sys
@@ -503,7 +419,7 @@ try:
     sys.exit(0)
 except ModuleNotFoundError as e:
     print(f"Dependency missing in strict test: {e}")
-    sys.exit(2)  # signal to retry with deps
+    sys.exit(2)
 except Exception as e:
     print(f"Import failed in strict test: {e}")
     sys.exit(1)
@@ -525,12 +441,10 @@ except Exception as e:
     sys.exit(1)
 PY
   elif [[ $STATUS -ne 0 ]]; then
-    # Clean the venv before failing to avoid leftovers
     rm -rf "$SMOKE_VENV"
     die "Smoke test failed."
   fi
 
-  # Clean up the temporary venv so nothing remains installed locally
   rm -rf "$SMOKE_VENV"
   info "Smoke test completed and cleaned up."
 fi
@@ -538,9 +452,7 @@ fi
 # Ensure we don't clobber an existing tag; offer safe cleanup if needed
 ensure_tag_available "$TAG" "$REMOTE"
 
-# ------------------------------------------------------------------------------
-# 🔐 CREATE & PUSH TAG — signed (GPG) or unsigned, to trigger workflow
-# ------------------------------------------------------------------------------
+# 🔐 CREATE & PUSH TAG
 SIGN="$(ask "Sign tag with GPG? (y/n)" "$SIGN_TAG_DEFAULT")"
 if [[ "$SIGN" =~ ^[Yy]$ ]]; then
   prepare_gpg
@@ -561,7 +473,7 @@ else
   warn "Tag not pushed. Later, run: git push $REMOTE $TAG"
 fi
 
-# Optionally clean local build artifacts once the release has been triggered
+# Optional cleanup
 if [[ "$DID_PUSH_TAG" == true ]]; then
   if confirm "Clean up local build artifacts (dist/, build/, *.egg-info) now?" "y"; then
     clean_artifacts
@@ -570,10 +482,7 @@ if [[ "$DID_PUSH_TAG" == true ]]; then
   fi
 fi
 
-
-# ----------------------------------------------------------------------
-# 📣 FINAL STATUS — make it explicit whether a release was executed
-# ----------------------------------------------------------------------
+# 📣 FINAL STATUS
 if [[ "$DID_PUSH_TAG" == true ]]; then
   info "Release EXECUTED: tag '$TAG' was pushed. Workflow should be running on GitHub."
 else
@@ -593,11 +502,7 @@ if [[ "$DID_PUSH_TAG" != true ]]; then
   exit 2  # non-zero indicates no release executed
 fi
 
-# ------------------------------------------------------------------------------
-# ✅ POST-PUBLISH VALIDATION — easy pip install command (TestPyPI)
-# ------------------------------------------------------------------------------
-# PyPI normalizes underscores to hyphens for package names in pip install.
-# If your distribution name in pyproject is "picture_analytics", the pip name is "picture-analytics".
+# ✅ POST-PUBLISH VALIDATION
 PKG_NAME_PIP="picture-analytics"
 echo
 echo "After your workflow publishes to TestPyPI, validate install with:"
