@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Changelog gates for alpha releases (strict header style)
+# Changelog gates for alpha releases (strict header style, no last-commit check)
 #   Header MUST be:  "## vX.Y.ZaN — YYYY-MM-DD"
 #   Only the FIRST block between '---' separators is considered "current".
 # ------------------------------------------------------------------------------
@@ -21,7 +21,7 @@ _extract_first_block_between_dashes() {
 # Normalize: trim trailing spaces, remove leading spaces, drop blank lines
 _normalize_lines() { sed -e 's/[[:space:]]\+$//' -e 's/^[[:space:]]\+//' -e '/^$/d'; }
 
-# Gate 1: FIRST block must have header: "## vPV — YYYY-MM-DD" and non-empty body
+# Gate 1: FIRST block must have header "## vPV — YYYY-MM-DD" and non-empty body
 gate_changelog_top_block_matches_version() {
   local pv="$1"   # e.g., 0.1.1a5
 
@@ -34,7 +34,7 @@ gate_changelog_top_block_matches_version() {
 
   # Strict header regex:
   #   ^##\s+v<digits>.<digits>.<digits>a<digits>\s+—\s+YYYY-MM-DD$
-  # NOTE: The dash is a literal em dash (U+2014). To accept hyphen-minus too, replace '—' with '[-—]'.
+  # NOTE: The dash is a literal em dash (U+2014). To accept hyphen-minus too, change '—' to '[-—]'.
   local header_re='^##[[:space:]]+v[0-9]+\.[0-9]+\.[0-9]+a[0-9]+[[:space:]]+—[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'
   local header_line
   header_line="$(printf '%s\n' "$block" | sed -n 's/^[[:space:]]*\(##[[:space:]]\+.*\)$/\1/p' | head -n1)"
@@ -59,7 +59,8 @@ gate_changelog_top_block_matches_version() {
   info "Top changelog block matches '## v${pv} — <date>' and contains content."
 }
 
-# Gate 2: file must contain a non-empty section for PV (anywhere) and be in HEAD
+# Gate 2: file must contain a non-empty section for PV (anywhere in the file)
+# NOTE: No \"included in last commit\" check here (removed by request).
 ensure_alpha_changelog_updated() {
   local pv="$1"    # e.g., 0.1.1a5
 
@@ -83,14 +84,7 @@ ensure_alpha_changelog_updated() {
 
   [[ -n "$section" ]] || die "Changelog entry body for v${pv} is empty. Add release notes under its header."
 
-  # Mandatory: ensure changelog file was part of the most recent commit
-  if git rev-parse --verify HEAD >/dev/null 2>&1; then
-    if ! git diff --name-only HEAD~1..HEAD -- "$ALPHA_CHANGELOG" | grep -qx "$ALPHA_CHANGELOG"; then
-      die "Changelog '$ALPHA_CHANGELOG' was not included in the last commit. Commit the changelog update for this release."
-    fi
-  fi
-
-  info "Changelog contains a non-empty entry for v${pv} and was in the last commit."
+  info "Changelog contains a non-empty entry for v${pv}."
 }
 
 # Step: derive TAG (still needed elsewhere) and run both gates
@@ -100,5 +94,5 @@ step_tag_and_changelog_prechecks() {
 
   export TAG
   gate_changelog_top_block_matches_version "$PV"   # FIRST block must match strict header & have content
-  ensure_alpha_changelog_updated "$PV"             # Entry exists (anywhere), non-empty, included in last commit
+  ensure_alpha_changelog_updated "$PV"             # Entry exists (anywhere) and is non-empty
 }
