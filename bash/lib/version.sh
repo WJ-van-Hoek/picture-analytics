@@ -1,4 +1,7 @@
-# --- existing functions kept; we add a few helpers and call them early in step_version_select ---
+# bash/lib/version.sh
+# ------------------------------------------------------------------------------
+# Version helpers (PEP 440 alpha) + "LT-stable" discovery from Git tags
+# ------------------------------------------------------------------------------
 
 get_pyproject_version(){ awk -F '"' '/^\s*version\s*=\s*"/ {print $2; exit}' "$PYPROJECT"; }
 get_init_version()    { awk -F '"' '/__version__\s*=\s*"/ {print $2; exit}' "$INIT_FILE"; }
@@ -16,7 +19,7 @@ PY
 }
 
 # ------------------------------
-# Semver helpers (alpha only)
+# Alpha helpers (PEP 440 <-> tag)
 # ------------------------------
 is_alpha_pep440(){ [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]]; }
 pep440_to_tag(){ [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)a([0-9]+)$ ]] || return 1; echo "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-alpha.${BASH_REMATCH[4]}"; }
@@ -25,7 +28,7 @@ bump_patch_alpha(){ is_alpha_pep440 "$1" || die "Not alpha: $1"; local M="${BASH
 bump_minor_alpha(){ is_alpha_pep440 "$1" || die "Not alpha: $1"; local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}"; echo "${M}.$((m+1)).0a1"; }
 
 # ------------------------------
-# NEW: discover latest releases from Git tags
+# Latest releases from Git tags
 # ------------------------------
 
 # Return newest tag matching the pattern (or empty), using natural version sort.
@@ -36,10 +39,26 @@ get_latest_alpha_tag() {
   _latest_tag 'v*-alpha.*'
 }
 
-# Latest *stable* tag like vX.Y.Z (no -alpha.*)
-get_latest_stable_tag() {
-  # list all vX.Y.Z tags and exclude any with -alpha.
-  git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-alpha\.' | sort -V | tail -n1
+# Latest *LT-stable* tag:
+#  - tag name MUST be vX.Y.Z (no prerelease suffix)
+#  - tag should be annotated; annotation subject/body must contain 'LT-stable' (case-insensitive)
+get_latest_lt_stable_tag() {
+  # Sort by version so the last matching line is the newest semver
+  git for-each-ref refs/tags --sort=version:refname \
+    --format='%(refname:short)%00%(subject)%00%(contents)' \
+  | awk -v IGNORECASE=1 '
+      BEGIN { latest="" }
+      {
+        n = split($0, a, "\0");
+        tag=a[1]; subj=a[2]; body=a[3];
+        if (tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) {
+          if (subj ~ /LT-stable/ || body ~ /LT-stable/) {
+            latest = tag;    # keep last (sorted ascending -> last is newest)
+          }
+        }
+      }
+      END { print latest }
+    '
 }
 
 # Convert a vX.Y.Z-alpha.N tag -> PEP 440 X.Y.ZaN
@@ -52,10 +71,10 @@ alpha_tag_to_pep440() {
   fi
 }
 
-# Suggest a next alpha if we need to enter one from scratch:
+# Suggest a next alpha:
 #  - If a latest alpha exists -> bump aN+1
-#  - Else if a stable exists  -> start at that patch+1 a1
-#  - Else                     -> 0.1.0a1
+#  - Else if a latest LT-stable exists -> start at that patch+1 a1
+#  - Else -> 0.1.0a1
 suggest_next_alpha_from_tags() {
   local latA latApv latS
   latA="$(get_latest_alpha_tag || true)"
@@ -66,7 +85,7 @@ suggest_next_alpha_from_tags() {
       return
     fi
   fi
-  latS="$(get_latest_stable_tag || true)"
+  latS="$(get_latest_lt_stable_tag || true)"
   if [[ -n "$latS" && "$latS" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     local M="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" p="${BASH_REMATCH[3]}"
     echo "${M}.${m}.$((p+1))a1"
@@ -75,30 +94,30 @@ suggest_next_alpha_from_tags() {
   echo "0.1.0a1"
 }
 
-# Print a small dashboard of latest tags; export for other steps if needed.
+# Pretty dashboard before version selection
 print_latest_releases() {
-  LATEST_STABLE_TAG="$(get_latest_stable_tag || true)"
+  LATEST_LT_STABLE_TAG="$(get_latest_lt_stable_tag || true)"
   LATEST_ALPHA_TAG="$(get_latest_alpha_tag || true)"
   LATEST_ALPHA_PV="$(alpha_tag_to_pep440 "$LATEST_ALPHA_TAG" || true)"
 
   echo
   echo "Latest releases (from Git tags):"
-  if [[ -n "$LATEST_STABLE_TAG" ]]; then
-    echo "  • Stable: $LATEST_STABLE_TAG"
+  if [[ -n "$LATEST_LT_STABLE_TAG" ]]; then
+    echo "  • LT-stable: $LATEST_LT_STABLE_TAG"
   else
-    echo "  • Stable: <none>"
+    echo "  • LT-stable: <none>"
   fi
   if [[ -n "$LATEST_ALPHA_TAG" ]]; then
-    echo "  • Alpha : $LATEST_ALPHA_TAG (PEP 440 → ${LATEST_ALPHA_PV})"
+    echo "  • Alpha    : $LATEST_ALPHA_TAG (PEP 440 → ${LATEST_ALPHA_PV})"
   else
-    echo "  • Alpha : <none>"
+    echo "  • Alpha    : <none>"
   fi
-  export LATEST_STABLE_TAG LATEST_ALPHA_TAG LATEST_ALPHA_PV
+  export LATEST_LT_STABLE_TAG LATEST_ALPHA_TAG LATEST_ALPHA_PV
   echo
 }
 
 # ------------------------------
-# Existing interactive step with a tiny addition up-front
+# Interactive version step
 # ------------------------------
 step_version_select() {
   PV="$(get_pyproject_version || true)"; IV="$(get_init_version || true)"
@@ -106,14 +125,12 @@ step_version_select() {
   echo "  $PYPROJECT version:     ${PV:-<none>}"
   echo "  $INIT_FILE __version__: ${IV:-<none>}"
 
-  # NEW: show latest releases first (informational only; no logic change)
+  # Show dashboard with LT-stable and alpha
   print_latest_releases
 
   if [[ -z "${PV:-}" || -z "${IV:-}" || "$PV" != "$IV" ]] || ! is_alpha_pep440 "$PV"; then
     warn "Version mismatch or not an alpha version (expected X.Y.ZaN)."
-    # Use a sensible default derived from tags (still editable by you)
-    local _default
-    _default="$(suggest_next_alpha_from_tags)"
+    local _default; _default="$(suggest_next_alpha_from_tags)"
     NEWV="$(ask "Enter alpha version (e.g., 0.1.0a4)" "$_default")"
     is_alpha_pep440 "$NEWV" || die "Version '$NEWV' is not alpha (expected X.Y.ZaN)."
     echo "Updating versions to $NEWV ..."
