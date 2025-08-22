@@ -1,34 +1,36 @@
 #!/usr/bin/env bash
-# ==============================================================================
-#  Alpha Release Orchestrator — main-tool.sh (extensively documented)
-# ==============================================================================
+# ============================================================================
+#  Release Orchestrator — general + alpha-aware (single entrypoint)
+# ============================================================================
 # PURPOSE
-#   This script is the *thin orchestrator* for your alpha release flow. It wires
-#   together the individual step libraries under bash/lib/ and runs them in the
-#   exact sequence you designed:
+#   A thin, mode-aware orchestrator for your release flow. It wires together
+#   small step libraries under bash/lib/ and runs them in a clear, linear order.
+#   Unlike the previous alpha-only tool, this script supports multiple release
+#   modes and contains an explicit branch where the alpha-specific steps are
+#   orchestrated.
 #
-#     1) Branch check (with optional WIP commit)                        [git.sh]
-#     2) Version selection / confirmation                               [version.sh]
-#     3) Derive tag + changelog gates                                   [changelog.sh]
-#     4) Final "Proceed with this version?"                             [gpg.sh]
-#     5) Environment prep (venv & tooling)                              [venv.sh]
-#     6) Build & validate (sdist+wheel, twine check, optional smoke)    [build_and_validate.sh]
-#     7) Tag safety + create tag (+ optional GPG) + push                [tag_and_push.sh]
-#     8) Finalize (optional cleanup, status, post‑publish hints)        [finalize.sh]
+#   Supported modes (via --mode or RELEASE_MODE):
+#     • alpha   – pre-release / canary channel (alpha-only checks enabled)
+#     • beta    – pre-release (stabilization)
+#     • rc      – release candidate
+#     • stable  – general availability
 #
-#   The goal: keep *all business logic* in small, focused libs. This file only
-#   resolves paths, loads config/libs, and invokes step_* functions in order.
+#   All business logic still lives in libs; this file only resolves paths, loads
+#   config/libs, chooses the mode, and invokes step_* functions in order. Where
+#   alpha-specific functions exist (from your current libs), we call them only
+#   when MODE=alpha; otherwise we prefer generic counterparts if present.
 #
 # USAGE
-#   $ bash/bin/alpha-release/main-tool.sh
-#   (from anywhere inside the repo; the script resolves the repository root)
+#   $ bash/bin/release-orchestrator.sh --mode <alpha|beta|rc|stable>
+#   (run from anywhere in the repo; the script resolves the repository root)
 #
-# EXPECTED LAYOUT
+# EXPECTED LAYOUT (unchanged)
 #   <repo>/
 #     ├─ bash/
-#     │   ├─ bin/alpha-release/main-tool.sh          # this file
-#     │   ├─ config/alpha.sh                         # configuration & env defaults
-#     │   └─ lib/                                    # step libraries
+#     │   ├─ bin/release-orchestrator.sh            # this file
+#     │   ├─ config/release.sh                      # general config & defaults (NEW)
+#     │   ├─ config/alpha.sh                        # alpha-specific defaults (kept)
+#     │   └─ lib/
 #     │       ├─ common.sh
 #     │       ├─ git.sh
 #     │       ├─ version.sh
@@ -39,119 +41,231 @@
 #     │       ├─ tag_and_push.sh
 #     │       └─ finalize.sh
 #
-# KEY ENV VARS (override via environment or in config/alpha.sh)
-#   PYPROJECT, INIT_FILE          – paths to project version sources
-#   RC_BRANCH                     – required source branch for alpha releases
-#   REMOTE                        – git remote for pushing branch & tag
-#   SIGN_TAG_DEFAULT              – default answer for GPG signing prompt (y/n)
-#   ALPHA_CHANGELOG               – path to your alpha changelog file
-#   VENV_DIR, VENV_PIP_INSTALL    – venv location & what to install into it
-#   ENFORCE_MONOTONIC_VERSION     – reserved for future guard logic (true/false)
-#   GPG_PREPARE                   – preflight checks before signed tags
-#   PYTHON_CMD                    – preferred Python (auto‑set by venv.sh)
+# KEY ENV VARS (generalized)
+#   RELEASE_MODE                – one of alpha|beta|rc|stable (default: stable)
+#   RELEASE_BRANCH              – required branch for this mode (falls back to RC_BRANCH when MODE=alpha for backcompat)
+#   REMOTE                      – git remote for pushing branch & tag
+#   SIGN_TAG_DEFAULT            – default answer for GPG signing prompt (y/n)
+#   CHANGELOG_FILE              – path to the changelog for this mode
+#   ALPHA_CHANGELOG             – legacy variable; used when MODE=alpha and set
+#   VENV_DIR, VENV_PIP_INSTALL  – venv location & what to install into it
+#   PYPROJECT, INIT_FILE        – paths to project version sources
+#   PYTHON_CMD                  – preferred Python (auto-set by venv.sh)
 #
 # EXIT CODES
 #   0 – success; tag pushed and workflow triggered
-#   2 – non‑fatal early exit (e.g., user declined, tag not pushed)
+#   2 – non-fatal early exit (e.g., user declined, tag not pushed)
 #   >0 – fatal error (missing files, failed checks, build errors)
 #
 # NOTES
-#   • This script uses bash "strict mode" (set -euo pipefail) to fail fast.
-#   • *Do not* put business logic here; keep it in libs to retain readability.
-#   • All prompts and heavy lifting occur in the step_* functions.
-# ==============================================================================
+#   • Bash strict mode is enabled. Fail fast; keep logic in libs.
+#   • Generic function names are tried first; alpha-legacy fallbacks are used
+#     when MODE=alpha to preserve your current library surface.
+# ============================================================================
 set -euo pipefail
 
-# ----------------------------------------------------------------------------
-# Resolve repository root – works both inside and outside Git clones.
-# 1) Try Git's toplevel detection.
-# 2) Fallback to path math relative to this script: ../../.. from bin/alpha-release/.
-# ----------------------------------------------------------------------------
-if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  :  # success; REPO_ROOT set by git
-else
-  # main-tool.sh is at <repo>/bash/bin/alpha-release/main-tool.sh -> repo root is ../../..
+# ---------------------------------------------
+# Helpers
+# ---------------------------------------------
+fn_exists() { declare -F "$1" >/dev/null 2>&1; }
+req() { [[ -f "$1" ]] || { echo "✖ missing: $1" >&2; exit 2; }; }
+info() { echo "[info] $*"; }
+warn() { echo "[warn] $*" >&2; }
+die()  { echo "✖ $*" >&2; exit 1; }
+
+# ---------------------------------------------
+# Parse args
+# ---------------------------------------------
+RELEASE_MODE="${RELEASE_MODE:-}"
+while [[ ${1:-} ]]; do
+  case "$1" in
+    --mode)
+      RELEASE_MODE="${2:-}"; shift 2;;
+    --mode=*)
+      RELEASE_MODE="${1#*=}"; shift;;
+    -h|--help)
+      cat <<EOF
+Usage: $0 [--mode alpha|beta|rc|stable]
+EOF
+      exit 0;;
+    *)
+      warn "Unknown argument: $1"; shift;;
+  esac
+done
+
+# Default mode
+RELEASE_MODE="${RELEASE_MODE:-stable}"
+case "$RELEASE_MODE" in
+  alpha|beta|rc|stable) :;;
+  *) die "Invalid --mode '$RELEASE_MODE' (expected alpha|beta|rc|stable)";;
+esac
+
+# ---------------------------------------------
+# Resolve repository root
+# ---------------------------------------------
+if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then :; else
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 fi
 cd "$REPO_ROOT"
 
-# ----------------------------------------------------------------------------
-# Load configuration and libraries.
-# We deliberately check each file's presence for clearer diagnostics when paths
-# drift (e.g., when running from subdirectories or CI).
-# ----------------------------------------------------------------------------
-req() { [[ -f "$1" ]] || { echo "✖ missing: $1" >&2; exit 2; }; }
+# ---------------------------------------------
+# Load configuration and libraries
+# ---------------------------------------------
+# General config first (NEW). If absent, fall back to legacy alpha config to avoid breakage.
+if [[ -f bash/config/release.sh ]]; then
+  source bash/config/release.sh
+else
+  warn "bash/config/release.sh not found; falling back to alpha config only"
+fi
 
-# Config (defines defaults and honors environment overrides)
-req "bash/config/alpha.sh";                      source "bash/config/alpha.sh"
+# Legacy alpha config remains available for MODE=alpha
+if [[ "$RELEASE_MODE" == "alpha" ]]; then
+  if [[ -f bash/config/alpha.sh ]]; then
+    source bash/config/alpha.sh
+  else
+    warn "alpha mode selected but bash/config/alpha.sh not found"
+  fi
+fi
 
-# Core helpers: colors, prompts, die/info/warn, require_cmd, clean_artifacts
-req "bash/lib/common.sh";                        source "bash/lib/common.sh"
+# Core libs (required)
+req "bash/lib/common.sh";               source "bash/lib/common.sh"
+req "bash/lib/git.sh";                  source "bash/lib/git.sh"
+req "bash/lib/version.sh";              source "bash/lib/version.sh"
+req "bash/lib/venv.sh";                 source "bash/lib/venv.sh"
+req "bash/lib/gpg.sh";                  source "bash/lib/gpg.sh"
+req "bash/lib/build_and_validate.sh";   source "bash/lib/build_and_validate.sh"
+req "bash/lib/tag_and_push.sh";         source "bash/lib/tag_and_push.sh"
+req "bash/lib/finalize.sh";             source "bash/lib/finalize.sh"
 
-# Git/branch orchestration: step_branch_and_prechecks, _commit_wip_before_switch,
-#                           ensure_tag_available
-req "bash/lib/git.sh";                           source "bash/lib/git.sh"
+# Changelog lib (required but tolerant)
+if [[ -f bash/lib/changelog.sh ]]; then
+  source bash/lib/changelog.sh
+else
+  warn "bash/lib/changelog.sh missing; changelog gates will be skipped"
+fi
 
-# Version I/O and selection: get_pyproject_version, get_init_version,
-#                            set_versions, is_alpha_pep440, pep440_to_tag,
-#                            bump_* helpers, step_version_select (sets PV/IV)
-req "bash/lib/version.sh";                       source "bash/lib/version.sh"
+# ---------------------------------------------
+# Derived / legacy compatibility
+# ---------------------------------------------
+MODE_UPPER=$(printf %s "$RELEASE_MODE" | tr '[:lower:]' '[:upper:]')
 
-# Changelog logic: recent_changes_gate (light), ensure_alpha_changelog_updated
-#                  (strict), step_tag_and_changelog_prechecks (sets TAG)
-req "bash/lib/changelog.sh";                     source "bash/lib/changelog.sh"
+# Branch rule: prefer RELEASE_BRANCH; alpha falls back to RC_BRANCH if set
+: "${RELEASE_BRANCH:=${RELEASE_BRANCH:-${RC_BRANCH:-}}}"
 
-# Environment prep: step_env_prepare (creates/activates venv, installs tooling,
-# ensures PYTHON_CMD points into the venv)
-req "bash/lib/venv.sh";                          source "bash/lib/venv.sh"
+# Changelog path: prefer CHANGELOG_FILE; alpha respects ALPHA_CHANGELOG if set
+if [[ "${CHANGELOG_FILE:-}" == "" && "$RELEASE_MODE" == "alpha" && -n "${ALPHA_CHANGELOG:-}" ]]; then
+  CHANGELOG_FILE="$ALPHA_CHANGELOG"
+fi
 
-# GPG/signing helpers and the final confirmation UI (confirm_release_version)
-req "bash/lib/gpg.sh";                           source "bash/lib/gpg.sh"
+# Export for libs that rely on these names
+export RELEASE_MODE CHANGELOG_FILE RELEASE_BRANCH
 
-# Build & validate: step_build_and_validate (build, twine check, smoke test)
-req "bash/lib/build_and_validate.sh";            source "bash/lib/build_and_validate.sh"
+# ---------------------------------------------
+# Tag derivation wrappers (prefer generic, fall back to alpha-specific)
+# ---------------------------------------------
+# Expect libs to expose a generic pep440_to_tag; if not, keep simple default.
+peptag() {
+  local pv="$1"; local mode="$2"
+  if fn_exists pep440_to_tag; then
+    # Prefer a 2-arg variant if provided, else call with PV only
+    if pep440_to_tag "--help" 2>/dev/null | grep -qi mode; then
+      pep440_to_tag "$pv" "$mode"
+    else
+      pep440_to_tag "$pv"
+    fi
+  else
+    # Fallback: turn 1.2.3[-pre] into v1.2.3[-pre]
+    printf 'v%s' "$pv"
+  fi
+}
 
-# Tag & push: step_tag_and_push (safety checks, create tag, sign optionally, push)
-req "bash/lib/tag_and_push.sh";                  source "bash/lib/tag_and_push.sh"
+validate_mode_version() {
+  local pv="$1"; local mode="$2"
+  case "$mode" in
+    alpha)
+      if fn_exists is_alpha_pep440; then
+        is_alpha_pep440 "$pv" || die "Version '$pv' is not a valid alpha per PEP 440"
+      fi
+      ;;
+    *) :;;
+  esac
+}
 
-# Finalization: step_finalize (cleanup prompt, final status, post‑publish hints)
-req "bash/lib/finalize.sh";                      source "bash/lib/finalize.sh"
+# ---------------------------------------------
+# Changelog gate wrappers (generic-first, alpha-fallback)
+# ---------------------------------------------
+changelog_light_gate() {
+  if fn_exists recent_changes_gate; then
+    recent_changes_gate "$CHANGELOG_FILE" "$PV" "$RELEASE_MODE"
+  fi
+}
 
-# ----------------------------------------------------------------------------
-# Execution order – this is the *single source of truth* for the flow.
-# Keep the steps minimal and readable here; implement behavior inside libs.
-# ----------------------------------------------------------------------------
+changelog_strict_gate() {
+  if fn_exists ensure_changelog_updated; then
+    ensure_changelog_updated "$CHANGELOG_FILE" "$PV" "$RELEASE_MODE"
+  elif [[ "$RELEASE_MODE" == "alpha" ]] && fn_exists ensure_alpha_changelog_updated; then
+    # Backcompat with legacy alpha function name
+    ensure_alpha_changelog_updated "$CHANGELOG_FILE" "$PV"
+  else
+    warn "No strict changelog gate available; skipping"
+  fi
+}
 
-# 1) Ensure we're on the correct RC branch, offer to commit WIP before switching,
+# ---------------------------------------------
+# Execution order — single source of truth for the flow
+# ---------------------------------------------
+
+# 1) Ensure we are on the correct branch, offer to commit WIP before switching,
 #    verify required files exist.
-step_branch_and_prechecks
+step_branch_and_prechecks "${RELEASE_BRANCH:-}" "${RELEASE_MODE}" || die "Branch prechecks failed"
 
-# 2) Choose/confirm the exact alpha version to release (sets PV, optionally
-#    commits a version bump if you changed it). No build occurs yet.
-step_version_select
+# 2) Choose/confirm the exact version to release (sets PV, optionally commits a
+#    version bump if you changed it). No build occurs yet.
+step_version_select "$RELEASE_MODE"
+: "${PV:?step_version_select must set PV}"
 
-# 3) Derive the Git tag from PV (TAG), then run changelog gates (light touch
-#    first; strict content/version check second). Both checks operate on PV/TAG
-#    so you validate *exactly* what you'll release.
-step_tag_and_changelog_prechecks
+# Validate the version against the mode (alpha-only rule today).
+validate_mode_version "$PV" "$RELEASE_MODE"
 
-# 4) Final pre-build confirmation. Shows Version/Tag/Branch/Changelog and asks
+# 3) Derive the Git tag from PV (TAG), then run changelog gates (light then strict)
+TAG="$(peptag "$PV" "$RELEASE_MODE")"
+export TAG
+
+# Light changelog gate (non-fatal hints)
+changelog_light_gate || true
+
+# Strict changelog/content gate (fatal if it enforces correctness)
+changelog_strict_gate
+
+# 4) Final pre-build confirmation: show Version/Tag/Branch/Mode/Changelog and ask
 #    for a yes/no before any build work or side effects.
-confirm_release_version "$PV" "$TAG" || die "Release cancelled by user."
+confirm_release_version "$PV" "$TAG" "$RELEASE_MODE" "$RELEASE_BRANCH" "$CHANGELOG_FILE" \
+  || die "Release cancelled by user."
 
-# 5) Prepare the build environment (create/activate venv, install pip tools and
-#    your package per VENV_PIP_INSTALL). This keeps builds reproducible and
-#    isolated from the system Python.
-step_env_prepare
+# 5) Prepare the build environment (create/activate venv, install tooling, ensure PYTHON_CMD)
+step_env_prepare "$RELEASE_MODE"
 
-# 6) Build artifacts (sdist + wheel), run twine check, optionally perform a
-#    smoke import test in a throwaway venv to catch packaging issues early.
-step_build_and_validate
+# 6) Build artifacts (sdist + wheel), run twine check, optional smoke import test
+step_build_and_validate "$RELEASE_MODE"
 
-# 7) Tag safety, create tag (optionally GPG-signed), push branch & tag to REMOTE
-#    to trigger your CI release workflow.
-step_tag_and_push
+# 7) Tag safety + create tag (+ optional GPG) + push branch & tag to REMOTE
+step_tag_and_push "$RELEASE_MODE"
 
-# 8) Final status/cleanup. Optionally remove build artifacts; emit post-publish
-#    hints (e.g., how to install from TestPyPI).
-step_finalize
+# 8) Final status/cleanup. Optionally remove build artifacts; emit post‑publish hints.
+step_finalize "$RELEASE_MODE" "$PV" "$TAG" "$RELEASE_BRANCH"
+
+# ---------------------------------------------
+# Alpha-specific orchestration note
+# ---------------------------------------------
+# When --mode alpha, the above flow automatically enables alpha-only behavior via
+# the wrappers:
+#   • Version validation uses is_alpha_pep440 if available.
+#   • Changelog strict gate falls back to ensure_alpha_changelog_updated.
+#   • Branch and step_* functions receive the mode, allowing libs to enforce
+#     alpha-specific policies (e.g., required branch, CI lanes, publishing to
+#     TestPyPI, etc.).
+#
+# Non-alpha modes should implement their differences inside the libs based on
+# the mode argument (e.g., CHANGELOG sections, branch naming, signing rules).
+# This keeps the orchestrator generic and future-proof.
+# ============================================================================
