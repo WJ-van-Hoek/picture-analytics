@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  Release Orchestrator — general + alpha-aware (single entrypoint)
+#  Release Orchestrator — general, mode-aware (single entrypoint)
 # ============================================================================
 # PURPOSE
 #   A thin, mode-aware orchestrator for your release flow. It wires together
 #   small step libraries under bash/lib/ and runs them in a clear, linear order.
-#   Unlike the previous alpha-only tool, this script supports multiple release
-#   modes and contains an explicit branch where the alpha-specific steps are
-#   orchestrated.
+#   This script supports multiple release modes (alpha, beta, rc, stable) and
+#   delegates mode-specific behavior to the underlying libraries, while keeping
+#   the orchestration itself generic and consistent across all modes.
 #
 #   Supported modes (via --mode or RELEASE_MODE):
 #     • alpha   – pre-release / canary channel (alpha-only checks enabled)
-#     • beta    – pre-release (stabilization)
-#     • rc      – release candidate
-#     • stable  – general availability
+#     • beta    – pre-release (stabilization) [UNTESTED, PLEASE USE CAREFULLY]
+#     • rc      – release candidate [UNTESTED, PLEASE USE CAREFULLY]
+#     • stable  – general availability [UNTESTED, PLEASE USE CAREFULLY]
 #
 #   All business logic still lives in libs; this file only resolves paths, loads
-#   config/libs, chooses the mode, and invokes step_* functions in order. Where
-#   alpha-specific functions exist (from your current libs), we call them only
-#   when MODE=alpha; otherwise we prefer generic counterparts if present.
+#   config/libs, chooses the mode, and invokes step_* functions in order.
 #
 # USAGE
-#   $ bash/bin/release-orchestrator.sh --mode <alpha|beta|rc|stable>
+#   $ bash/bin/release-tool.sh --mode <alpha|beta|rc|stable>
 #   (run from anywhere in the repo; the script resolves the repository root)
 #
-# EXPECTED LAYOUT (unchanged)
+# EXPECTED LAYOUT
 #   <repo>/
 #     ├─ bash/
-#     │   ├─ bin/release-orchestrator.sh            # this file
+#     │   ├─ bin/release-tool.sh                    # this file
 #     │   ├─ config/release.sh                      # general config & defaults (NEW)
 #     │   ├─ config/alpha.sh                        # alpha-specific defaults (kept)
 #     │   └─ lib/
@@ -43,7 +41,7 @@
 #
 # KEY ENV VARS (generalized)
 #   RELEASE_MODE                – one of alpha|beta|rc|stable (default: stable)
-#   RELEASE_BRANCH              – required branch for this mode (falls back to RC_BRANCH when MODE=alpha for backcompat)
+#   RELEASE_BRANCH              – required branch for this mode
 #   REMOTE                      – git remote for pushing branch & tag
 #   SIGN_TAG_DEFAULT            – default answer for GPG signing prompt (y/n)
 #   CHANGELOG_FILE              – path to the changelog for this mode
@@ -61,6 +59,9 @@
 #   • Bash strict mode is enabled. Fail fast; keep logic in libs.
 #   • Generic function names are tried first; alpha-legacy fallbacks are used
 #     when MODE=alpha to preserve your current library surface.
+
+# DISCLAIMER
+#   This script has only been tested for alpha releases. Use other modes (beta, rc, stable) at your own risk.
 # ============================================================================
 set -euo pipefail
 
@@ -100,11 +101,15 @@ case "$RELEASE_MODE" in
   *) die "Invalid --mode '$RELEASE_MODE' (expected alpha|beta|rc|stable)";;
 esac
 
+if [[ "$RELEASE_MODE" != "alpha" ]]; then
+  warn "This script has only been tested for alpha releases. You are using mode: '$RELEASE_MODE'. Proceed with caution."
+fi
+
 # ---------------------------------------------
 # Resolve repository root
 # ---------------------------------------------
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then :; else
-  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 cd "$REPO_ROOT"
 
@@ -149,13 +154,27 @@ fi
 # ---------------------------------------------
 MODE_UPPER=$(printf %s "$RELEASE_MODE" | tr '[:lower:]' '[:upper:]')
 
-# Branch rule: prefer RELEASE_BRANCH; alpha falls back to RC_BRANCH if set
-: "${RELEASE_BRANCH:=${RELEASE_BRANCH:-${RC_BRANCH:-}}}"
+# Branch rule: prefer RELEASE_BRANCH; for alpha fall back to rc-alpha branch, then RC_BRANCH (backcompat)
+if [[ -z "${RELEASE_BRANCH:-}" ]]; then
+  if [[ "$RELEASE_MODE" == "alpha" ]]; then
+    RELEASE_BRANCH="${RC_ALPHA_BRANCH:-${RC_BRANCH:-}}"
+  fi
+fi
 
 # Changelog path: prefer CHANGELOG_FILE; alpha respects ALPHA_CHANGELOG if set
 if [[ "${CHANGELOG_FILE:-}" == "" && "$RELEASE_MODE" == "alpha" && -n "${ALPHA_CHANGELOG:-}" ]]; then
   CHANGELOG_FILE="$ALPHA_CHANGELOG"
 fi
+
+# If still unset for alpha, default to repo-standard path if present
+if [[ "$RELEASE_MODE" == "alpha" && -z "${CHANGELOG_FILE:-}" && -f changelogs/alpha.md ]]; then
+  CHANGELOG_FILE="changelogs/alpha.md"
+fi
+
+# Guard: ensure required step functions exist before proceeding
+for fn in step_branch_and_prechecks step_version_select step_env_prepare step_build_and_validate step_tag_and_push step_finalize confirm_release_version; do
+  fn_exists "$fn" || die "Missing required function '$fn' (check bash/lib/*.sh)"
+done
 
 # Export for libs that rely on these names
 export RELEASE_MODE CHANGELOG_FILE RELEASE_BRANCH
@@ -255,17 +274,17 @@ step_tag_and_push "$RELEASE_MODE"
 step_finalize "$RELEASE_MODE" "$PV" "$TAG" "$RELEASE_BRANCH"
 
 # ---------------------------------------------
-# Alpha-specific orchestration note
+# Mode-specific orchestration note
 # ---------------------------------------------
-# When --mode alpha, the above flow automatically enables alpha-only behavior via
-# the wrappers:
-#   • Version validation uses is_alpha_pep440 if available.
-#   • Changelog strict gate falls back to ensure_alpha_changelog_updated.
-#   • Branch and step_* functions receive the mode, allowing libs to enforce
-#     alpha-specific policies (e.g., required branch, CI lanes, publishing to
-#     TestPyPI, etc.).
+# The flow above is mode-aware: the same sequence of steps is always invoked,
+# but libraries may alter their behavior depending on RELEASE_MODE.
 #
-# Non-alpha modes should implement their differences inside the libs based on
-# the mode argument (e.g., CHANGELOG sections, branch naming, signing rules).
-# This keeps the orchestrator generic and future-proof.
+# Examples:
+#   • Version validation may enforce different rules for alpha vs rc vs stable.
+#   • Changelog gates may look at different files or sections per mode.
+#   • Branch checks, CI lanes, and publishing targets can all vary by mode.
+#
+# By keeping the orchestration generic and delegating mode-specific differences
+# to the libs, the tool remains consistent while still supporting diverse
+# release policies.
 # ============================================================================
